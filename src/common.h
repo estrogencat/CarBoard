@@ -38,8 +38,35 @@
 #define getIvar(object, ivar) [object valueForKey:ivar]
 #define setIvar(object, ivar, value) [object setValue:value forKey:ivar]
 
+// NSLog plus a plain file, since syslog isn't easy to read on-device
+#define CR_LOG_PATH "/var/mobile/Library/Logs/carplayenable.log"
+__unused static void CRLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    NSLog(@"[carplayenable] %@", message);
+
+    static dispatch_queue_t logQueue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        logQueue = dispatch_queue_create("carplayenable.log", DISPATCH_QUEUE_SERIAL);
+    });
+    NSString *line = [NSString stringWithFormat:@"%@ [%@] %@\n", [NSDate date], [[NSProcessInfo processInfo] processName], message];
+#if !__has_feature(objc_arc)
+    [message release];
+#endif
+    dispatch_async(logQueue, ^{
+        FILE *logFile = fopen(CR_LOG_PATH, "a");
+        if (logFile) {
+            fputs([line UTF8String], logFile);
+            fclose(logFile);
+        }
+    });
+}
+
 __unused static void LogSelectorError(id object, SEL selector) {
-    NSLog(@"carplayenable error: %@ does not respond to selector %@", object, NSStringFromSelector(selector));
+    CRLog(@"error: %@ does not respond to selector %@", object ? NSStringFromClass([object class]) : @"nil", NSStringFromSelector(selector));
 }
 
 #define objcInvokeT(_obj, s, t)                                                       \

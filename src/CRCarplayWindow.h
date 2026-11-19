@@ -23,6 +23,12 @@ id getCarplayCADisplay(void);
 
 - (id)initWithBundleIdentifier:(NSString *)identifier;
 
+// frame for the hosted scene, in the phone display's portrait coordinate space
+- (CGRect)sceneFrame;
+
 @end
+
+// foreground, orientation, frame, and none of the phone's notch/home-indicator insets
+void CRApplyCarplaySceneSettings(id settings, CRCarPlayWindow *window);
 // main-screen (or any) scene views showing this scene handle, skipping ones inside excludingWindow
 NSArray *CRSceneViewsForSceneHandle(id sceneHandle, UIWindow *excludingWindow);

@@ -211,24 +211,9 @@ whatever the main display's layout wants
 */
 static void CRForceCarplaySceneSettings(id settings)
 {
-    if (![settings isKindOfClass:objc_getClass("UIMutableApplicationSceneSettings")])
-    {
-        return;
-    }
-
+    // keeps whatever orientation the CarPlay window picked (the rotate button flips it)
     id liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
-    // keep whatever orientation the CarPlay window picked (the rotate button flips it)
-    long long orientation = liveCarplayWindow ? (long long)[(CRCarPlayWindow *)liveCarplayWindow orientation] : (long long)UIInterfaceOrientationLandscapeLeft;
-
-    objcInvokeIf_1(settings, @"setForeground:", YES);
-    objcInvokeIf_1(settings, @"setInterfaceOrientation:", orientation);
-    objcInvokeIf_1(settings, @"setDeviceOrientation:", orientation);
-
-    UIView *container = [liveCarplayWindow appContainerView];
-    if (container && [settings respondsToSelector:NSSelectorFromString(@"setFrame:")])
-    {
-        ((void (*)(id, SEL, CGRect))objc_msgSend)(settings, NSSelectorFromString(@"setFrame:"), container.bounds);
-    }
+    CRApplyCarplaySceneSettings(settings, (CRCarPlayWindow *)liveCarplayWindow);
 }
 
 /*
