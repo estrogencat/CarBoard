@@ -234,7 +234,9 @@ static void CRForceCarplaySceneSettings(id settings)
 /*
 18.x mostly updates scenes through block-based APIs (updateUISettingsWithBlock: and friends) that never hit
 updateSettings:withTransitionContext:completion:. Wrap the caller's block so the forced settings are applied after it.
-The wrapper takes/returns enough for both the (settings) and (settings, transitionContext) block shapes.
+FBScene's _joinUpdate:block:completion: calls these blocks with the mutable settings first. The second register is
+passed through untouched for blocks that take more, but it isn't always an object (activation passes something else),
+so only the first argument is ever inspected.
 */
 static id CRWrapSceneUpdateBlock(id scene, id block)
 {
@@ -243,11 +245,10 @@ static id CRWrapSceneUpdateBlock(id scene, id block)
         return block;
     }
 
-    id (^originalBlock)(id, id) = block;
-    return [[^id(id arg1, id arg2) {
-        id result = originalBlock(arg1, arg2);
-        CRForceCarplaySceneSettings(arg1);
-        CRForceCarplaySceneSettings(arg2);
+    void *(^originalBlock)(id, void *) = block;
+    return [[^void *(id settings, void *passthrough) {
+        void *result = originalBlock(settings, passthrough);
+        CRForceCarplaySceneSettings(settings);
         return result;
     } copy] autorelease];
 }
