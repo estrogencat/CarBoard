@@ -24,3 +24,5 @@ id getCarplayCADisplay(void);
 - (id)initWithBundleIdentifier:(NSString *)identifier;
 
 @end
+// main-screen (or any) scene views showing this scene handle, skipping ones inside excludingWindow
+NSArray *CRSceneViewsForSceneHandle(id sceneHandle, UIWindow *excludingWindow);

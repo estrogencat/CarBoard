@@ -1,9 +1,10 @@
 ARCHS = arm64 arm64e
 TARGET = iphone:clang:16.5:16.5
 
+THEOS_PACKAGE_SCHEME = rootless
+
 include $(THEOS)/makefiles/common.mk
 
-THEOS_PACKAGE_SCHEME=rootless
 
 BUNDLE_NAME = carplayenableprefs
 

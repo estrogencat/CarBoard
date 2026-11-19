@@ -33,13 +33,16 @@ When Carplay window is requesting the app to rotate
     if (orientationToRequest == -1)
     {
         orientationToRequest = [[UIDevice currentDevice] orientation];
-        // sometimes 0?
-        orientationToRequest = MAX(1, orientationToRequest);
+        // 0 = unknown, 5/6 = face up/down: not interface orientations
+        orientationToRequest = (orientationToRequest < 1 || orientationToRequest > 4) ? 1 : orientationToRequest;
     }
 
     // might not be created yet...
     UIWindow *keyWindow = objcInvoke([UIApplication sharedApplication], @"keyWindow");
-    objcInvoke_3(keyWindow, @"_setRotatableViewOrientation:duration:force:", orientationToRequest, 0, 1);
+    if (keyWindow)
+    {
+        ((void (*)(id, SEL, long long, double, BOOL))objc_msgSend)(keyWindow, NSSelectorFromString(@"_setRotatableViewOrientation:duration:force:"), orientationToRequest, 0.0, YES);
+    }
 }
 
 %end
@@ -49,12 +52,12 @@ Called when a window intends to rotate to a new orientation. Used to force lands
 */
 %hook UIWindow
 
-- (void)_setRotatableViewOrientation:(int)orientation duration:(float)duration force:(int)force
+- (void)_setRotatableViewOrientation:(long long)orientation duration:(double)duration force:(BOOL)force
 {
     if (orientationOverride > 0)
     {
         LOG_LIFECYCLE_EVENT;
-        return %orig(orientationOverride, duration, force);
+        return %orig((long long)orientationOverride, duration, force);
     }
     %orig;
 }

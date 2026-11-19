@@ -1,8 +1,7 @@
-#include "../crash_reporting/reporting.h"
 #include "../common.h"
 
 /*
-Injected into the CarPlay process
+Injected into the CarPlay process (com.apple.CarPlayApp, code in DashBoard.framework)
 */
 %group CARPLAY
 
@@ -12,99 +11,179 @@ struct SBIconImageInfo {
     double continuousCornerRadius;
 };
 
-%hook DashBoard
+static NSString *const kForcedAppTag = @"CarPlayEnable";
+
 /*
-Given an FBSApplicationLibrary, force all apps within the library to show up on the CarPlay dashboard.
-Exclude system apps (they are always glitchy for some reason) and enforce a blacklist.
-If an app already supports CarPlay, leave it alone
+Non-Apple apps that aren't excluded in preferences get forced onto the dashboard.
+Stock apps are skipped because they are always glitchy. Jailbreak apps live in /Applications
+and report as "System", so the identifier is what decides it.
 */
-void addCarplayDeclarationsToAppLibrary(id appLibrary)
+static BOOL shouldForceBundleIdentifier(NSString *bundleID)
 {
-    LOG_LIFECYCLE_EVENT;
-
-    // Load exluded apps from user's preferences
-    NSArray *userExcludedApps = [[CRPreferences sharedInstance] excludedApplications];
-
-    for (id appInfo in objcInvoke(appLibrary, @"allInstalledApplications"))
+    if (!bundleID || [bundleID hasPrefix:@"com.apple."])
     {
-        if (getIvar(appInfo, @"_carPlayDeclaration") == nil)
-        {
-            NSString *appBundleID = objcInvoke(appInfo, @"bundleIdentifier");
-            // Skip system apps if the identifier contains "apple". The intention is to exclude all System/Stock apps, but jailbroken apps (Kodi) are
-            // considered "System", so looking at the identifier is necessary
-            if ([objcInvoke(appInfo, @"bundleType") isEqualToString:@"User"] == NO)
-            {
-                if ([appBundleID containsString:@"com.apple."])
-                {
-                    continue;
-                }
-            }
+        return NO;
+    }
 
-            // Skip if blacklisted
-            if (userExcludedApps && [userExcludedApps containsObject:appBundleID])
-            {
-                continue;
-            }
+    NSArray *userExcludedApps = [[CRPreferences sharedInstance] excludedApplications];
+    return ![userExcludedApps containsObject:bundleID];
+}
 
-            // Create a fake declaration so this app appears to support carplay.
-            id carplayDeclaration = [[objc_getClass("CRCarPlayAppDeclaration") alloc] init];
-            // This is not template-driven -- important. Without specifying this, the process that hosts the Templates will continuously spin up
-            // and crash, trying to find a non-existant template for this declaration
-            objcInvoke_1(carplayDeclaration, @"setSupportsTemplates:", 0);
-            objcInvoke_1(carplayDeclaration, @"setSupportsMaps:", 1);
-            objcInvoke_1(carplayDeclaration, @"setBundleIdentifier:", appBundleID);
-            objcInvoke_1(carplayDeclaration, @"setBundlePath:", objcInvoke(appInfo, @"bundleURL"));
-            setIvar(appInfo, @"_carPlayDeclaration", carplayDeclaration);
+static BOOL isForcedAppInfo(id appInfo)
+{
+    return [objcInvoke(appInfo, @"tags") containsObject:kForcedAppTag];
+}
 
-            // Add a tag to the app, to keep track of which apps have been "forced" into carplay
-            NSArray *newTags = @[@"CarPlayEnable"];
-            if (objcInvoke(appInfo, @"tags"))
-            {
-                newTags = [newTags arrayByAddingObjectsFromArray:objcInvoke(appInfo, @"tags")];
-            }
-            setIvar(appInfo, @"_tags", newTags);
-        }
+/*
+Give an app a fake CarPlay declaration so DashBoard treats it like a non-template (Maps-style) app.
+If the app already supports CarPlay it's left alone.
+*/
+static void addCarplayDeclarationToAppInfo(id appInfo)
+{
+    if (!appInfo || getIvar(appInfo, @"_carPlayDeclaration") != nil)
+    {
+        return;
+    }
+
+    NSString *appBundleID = objcInvoke(appInfo, @"bundleIdentifier");
+    NSArray *existingTags = objcInvoke(appInfo, @"tags");
+    if (!shouldForceBundleIdentifier(appBundleID) || [existingTags containsObject:@"hidden"])
+    {
+        return;
+    }
+
+    id carplayDeclaration = [[[objc_getClass("CRCarPlayAppDeclaration") alloc] init] autorelease];
+    // not template-driven: otherwise the template host keeps spinning up looking for a template that doesn't exist
+    objcInvoke_1(carplayDeclaration, @"setSupportsTemplates:", NO);
+    objcInvoke_1(carplayDeclaration, @"setSupportsMaps:", YES);
+    objcInvoke_1(carplayDeclaration, @"setBundleIdentifier:", appBundleID);
+    objcInvoke_1(carplayDeclaration, @"setBundlePath:", [objcInvoke(appInfo, @"bundleURL") path]);
+    setIvar(appInfo, @"_carPlayDeclaration", carplayDeclaration);
+
+    // tag it so launches can tell it was forced
+    NSArray *newTags = @[kForcedAppTag];
+    if (existingTags)
+    {
+        newTags = [newTags arrayByAddingObjectsFromArray:existingTags];
+    }
+    setIvar(appInfo, @"_tags", newTags);
+}
+
+static id currentDockController(void)
+{
+    id dashboard = objcInvoke([UIApplication sharedApplication], @"_currentDashboard");
+    return objcInvoke(objcInvoke(dashboard, @"rootViewController"), @"appDockViewController");
+}
+
+/*
+Put the app in the dock's recents, the same way a real launch would
+*/
+static void recordAppLaunch(NSString *bundleID)
+{
+    id appHistory = objcInvoke([UIApplication sharedApplication], @"_currentAppHistory");
+    NSString *previousBundleID = nil;
+    NSArray *orderedAppHistory = objcInvoke(appHistory, @"orderedAppHistory");
+    if ([orderedAppHistory count] > 0)
+    {
+        previousBundleID = objcInvoke([orderedAppHistory firstObject], @"bundleIdentifier");
+    }
+
+    if (appHistory)
+    {
+        ((void (*)(id, SEL, id, id))objc_msgSend)(appHistory, NSSelectorFromString(@"_bundleIdentifierDidBecomeVisible:previousBundleIdentifier:"), bundleID, previousBundleID);
+    }
+
+    id dockController = currentDockController();
+    objcInvoke(dockController, @"_refreshAppDock");
+    // DashBoard disables the dock while it waits for a scene that never comes for forced apps
+    if (dockController)
+    {
+        objcInvoke_1(dockController, @"setDockEnabled:", YES);
     }
 }
 
 /*
-Include all User applications on the CarPlay dashboard
+Ask SpringBoard to host the app on the CarPlay screen
 */
-+ (id)_newApplicationLibrary
+static void requestCarplayLaunch(NSString *bundleID)
 {
     LOG_LIFECYCLE_EVENT;
-    // %orig creates an app library that only contains Carplay-enabled stuff, so its not useful.
-    // Create an app library that contains everything
-    id allAppsConfiguration = [[objc_getClass("FBSApplicationLibraryConfiguration") alloc] init];
-    objcInvoke_1(allAppsConfiguration, @"setApplicationInfoClass:", objc_getClass("DBApplicationInfo"));
-    objcInvoke_1(allAppsConfiguration, @"setApplicationPlaceholderClass:", objc_getClass("FBSApplicationPlaceholder"));
-    objcInvoke_1(allAppsConfiguration, @"setAllowConcurrentLoading:", 1);
-    objcInvoke_1(allAppsConfiguration, @"setInstalledApplicationFilter:", ^BOOL(id appProxy, NSSet *arg2) {
-        NSArray *appTags = objcInvoke(appProxy, @"appTags");
-        // Skip apps with a Hidden tag
-        if ([appTags containsObject:@"hidden"])
-        {
-            return 0;
-        }
-        return 1;
-    });
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable" object:nil userInfo:@{@"identifier": bundleID}];
+    recordAppLaunch(bundleID);
+}
 
-    id allAppsLibrary = objcInvoke_1([objc_getClass("FBSApplicationLibrary") alloc], @"initWithConfiguration:", allAppsConfiguration);
-    // Add a "carplay declaration" to each app so they appear on the dashboard
-    addCarplayDeclarationsToAppLibrary(allAppsLibrary);
+%hook FBSApplicationLibrary
 
-    NSArray *systemIdentifiers = @[@"com.apple.CarPlayTemplateUIHost", @"com.apple.MusicUIService", @"com.apple.springboard", @"com.apple.InCallService", @"com.apple.CarPlaySettings", @"com.apple.CarPlayApp", @"com.apple.CarPlayWallpaper"];
-    for (NSString *systemIdent in systemIdentifiers)
+/*
+DashBoard's library only loads CarPlay-capable apps, picked by applicationIdentityFilter.
+Widen that filter so forced apps get loaded too.
+*/
+- (id)initWithConfiguration:(id)configuration
+{
+    Class infoClass = ((Class (*)(id, SEL))objc_msgSend)(configuration, NSSelectorFromString(@"applicationInfoClass"));
+    if (infoClass == objc_getClass("DBApplicationInfo") && [configuration respondsToSelector:NSSelectorFromString(@"setApplicationIdentityFilter:")])
     {
-        id appProxy = objcInvoke_1(objc_getClass("LSApplicationProxy"), @"applicationProxyForIdentifier:", systemIdent);
-        id appState = objcInvoke(appProxy, @"appState");
-        if (objcInvokeT(appState, @"isValid", int) == 1)
-        {
-            objcInvoke_2(allAppsLibrary, @"addApplicationProxy:withOverrideURL:", appProxy, 0);
-        }
+        LOG_LIFECYCLE_EVENT;
+        BOOL (^origFilter)(id) = [[objcInvoke(configuration, @"applicationIdentityFilter") retain] autorelease];
+        BOOL (^widenedFilter)(id) = ^BOOL(id identity) {
+            if (!origFilter || origFilter(identity))
+            {
+                return YES;
+            }
+            return shouldForceBundleIdentifier(objcInvoke(identity, @"bundleIdentifier"));
+        };
+        objcInvoke_1(configuration, @"setApplicationIdentityFilter:", widenedFilter);
     }
 
-    return allAppsLibrary;
+    return %orig;
+}
+
+%end
+
+%hook DBApplicationController
+
+/*
+Called for every app DashBoard loads, at startup and on install/update. The DBApplication made from
+this info computes its CarPlay policy from the declaration, so it has to be added first.
+*/
+- (void)_loadApplicationWithInfo:(id)appInfo
+{
+    addCarplayDeclarationToAppInfo(appInfo);
+    %orig;
+}
+
+%end
+
+%hook DBDashboard
+
+/*
+Every launch path (home icons, dock, Siri, URLs) ends up here with a DBApplicationLaunchInfo as the event context.
+Forced apps are handed to SpringBoard instead of DashBoard's workspace.
+*/
+- (void)_handleOpenApplicationEvent:(id)event
+{
+    id launchInfo = objcInvoke(event, @"context");
+    id application = [launchInfo respondsToSelector:NSSelectorFromString(@"application")] ? objcInvoke(launchInfo, @"application") : nil;
+    id appInfo = application ? objcInvoke(application, @"info") : nil;
+    if (!appInfo || !isForcedAppInfo(appInfo))
+    {
+        %orig;
+        return;
+    }
+
+    LOG_LIFECYCLE_EVENT;
+    requestCarplayLaunch(objcInvoke(application, @"bundleIdentifier"));
+
+    // close any native CarPlay app that's in front
+    NSDictionary *foregroundScenes = objcInvoke(self, @"identifierToForegroundAppScenesMap");
+    if ([[foregroundScenes allKeys] count] > 0)
+    {
+        id homeButtonEvent = objcInvoke_2(objc_getClass("DBEvent"), @"eventWithType:context:", (unsigned long long)1, @"Close carplay app");
+        if (homeButtonEvent)
+        {
+            objcInvoke_1(self, @"handleEvent:", homeButtonEvent);
+        }
+    }
 }
 
 %end
@@ -117,9 +196,9 @@ Carplay dashboard icon appearance
 /*
 Make the CarPlay dashboard show 5 columns of apps instead of 4
 */
-- (int)numberOfPortraitColumns
+- (NSUInteger)numberOfPortraitColumns
 {
-    int columns = %orig;
+    NSUInteger columns = %orig;
     if ([[CRPreferences sharedInstance] fiveColumnIconLayout])
     {
         columns = MAX(5, columns);
@@ -130,7 +209,7 @@ Make the CarPlay dashboard show 5 columns of apps instead of 4
 /*
 Make the Carplay dashboard icons a little smaller so 5 fit comfortably
 */
-- (struct SBIconImageInfo)iconImageInfoForGridSizeClass:(unsigned long long)arg1
+- (struct SBIconImageInfo)iconImageInfoForGridSizeClass:(id)gridSizeClass
 {
     struct SBIconImageInfo info = %orig;
     if ([[CRPreferences sharedInstance] fiveColumnIconLayout])
@@ -143,158 +222,33 @@ Make the Carplay dashboard icons a little smaller so 5 fit comfortably
 %end
 
 /*
-When an app is launched via Carplay dashboard
-*/
-%hook DBApplicationLaunchInfo
-
-+ (id)launchInfoForApplication:(id)arg1 withActivationSettings:(id)arg2
-{
-    // An app is being launched. Use the attached tags to determine if carplay support has been coerced onto it
-    if ([objcInvoke(arg1, @"tags") containsObject:@"CarPlayEnable"])
-    {
-        LOG_LIFECYCLE_EVENT;
-        // Notify SpringBoard of the launch. SpringBoard will host the application + UI
-        [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable" object:nil userInfo:@{@"identifier": objcInvoke(arg1, @"bundleIdentifier")}];
-
-        // Add this item into the App History (so it shows up in the dock's "recents")
-        id sharedApp = [UIApplication sharedApplication];
-        id appHistory = objcInvoke(sharedApp, @"_currentAppHistory");
-
-        NSString *previousBundleID = nil;
-        NSArray *orderedAppHistory = objcInvoke(appHistory, @"orderedAppHistory");
-        if ([orderedAppHistory count] > 0)
-        {
-            previousBundleID = objcInvoke([orderedAppHistory firstObject], @"bundleIdentifier");
-        }
-
-        ((void (*)(id, SEL, id, id))objc_msgSend)(appHistory, NSSelectorFromString(@"_bundleIdentifierDidBecomeVisible:previousBundleIdentifier:"), objcInvoke(arg1, @"bundleIdentifier"), previousBundleID);
-
-        id dashboardRootController = objcInvoke(objcInvoke(sharedApp, @"_currentDashboard"), @"rootViewController");
-        id dockController = objcInvoke(dashboardRootController, @"appDockViewController");
-        objcInvoke(dockController, @"_refreshAppDock");
-
-        // If there is already a native-Carplay app running, close it
-        id dashboard = objcInvoke(sharedApp, @"_currentDashboard");
-        assertGotExpectedObject(dashboard, @"DBDashboard");
-        NSDictionary *foregroundScenes = objcInvoke(dashboard, @"identifierToForegroundAppScenesMap");
-        if ([[foregroundScenes allKeys] count] > 0)
-        {
-            id homeButtonEvent = objcInvoke_2(objc_getClass("DBEvent"), @"eventWithType:context:", 1, @"Close carplay app");
-            assertGotExpectedObject(homeButtonEvent, @"DBEvent");
-            objcInvoke_1(dashboard, @"handleEvent:", homeButtonEvent);
-        }
-
-        return nil;
-    }
-
-    return %orig;
-}
-
-%end
-
-/*
-When an app is launched via the Carplay Dock
-*/
-%hook DBAppDockViewController
-
-- (void)_dockButtonPressed:(id)arg1
-{
-    %orig;
-
-    NSString *bundleID = objcInvoke(arg1, @"bundleIdentifier");
-    id sharedApp = [UIApplication sharedApplication];
-    id appLibrary = objcInvoke(sharedApp, @"sharedApplicationLibrary");
-    id selectedAppInfo = objcInvoke_1(appLibrary, @"applicationInfoForBundleIdentifier:", bundleID);
-    if ([objcInvoke(selectedAppInfo, @"tags") containsObject:@"CarPlayEnable"])
-    {
-        objcInvoke_1(self, @"setDockEnabled:", 1);
-    }
-}
-
-%end
-
-
-/*
-Called when an app is installed or uninstalled.
-Used for adding "carplay declaration" to newly installed apps so they appear on the dashboard
-*/
-%hook DBDashboardHomeViewController
-
-- (id)initWithEnvironment:(id)arg1
-{
-    id _self = %orig;
-    // Register for Preference Changed notifications
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:PREFERENCES_CHANGED_NOTIFICATION object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        // Reload the preferences from disk
-        [[CRPreferences sharedInstance] reloadPreferences];
-        if ([note.object isEqualToString:kPrefsAppLibraryChanged])
-        {
-            // Apps were added/removed - reload the app library
-            id updatedLibrary = objcInvoke(objc_getClass("DashBoard"), @"_newApplicationLibrary");
-            objcInvoke_1(self, @"setLibrary:", updatedLibrary);
-            objcInvoke(self, @"_handleAppLibraryRefresh");
-        }
-        else if ([note.object isEqualToString:kPrefsIconLayoutChanged])
-        {
-            // 5 column dashboard was changed. Relayout dashboard icons
-            objcInvoke(self, @"resetIconState");
-        }
-    }];
-
-    return _self;
-}
-
-- (void)_handleAppLibraryRefresh
-{
-    id appLibrary = objcInvoke(self, @"library");
-    addCarplayDeclarationsToAppLibrary(appLibrary);
-    %orig;
-}
-
-%end
-
-
-/*
 App icons on the Carplay dashboard.
-For apps that natively support Carplay, add a longpress gesture to launch it in "full mode". Tapping them
-will launch their normal Carplay mode UI
+For apps that natively support Carplay, a long press launches them in "full mode". Tapping them
+still opens their normal Carplay UI
 */
 %hook DBIconView
 
 %new
 - (void)handleLaunchAppInNormalMode:(UILongPressGestureRecognizer *)gesture
 {
-    if ([gesture state] == UIGestureRecognizerStateBegan)
+    if ([gesture state] != UIGestureRecognizerStateBegan)
     {
-        id icon = objcInvoke(self, @"icon");
-        assertGotExpectedObject(icon, @"SBIcon");
-        NSString *bundleID = objcInvoke(icon, @"applicationBundleID");
+        return;
+    }
 
-        [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable" object:nil userInfo:@{@"identifier": bundleID}];
-
-        id sharedApp = [UIApplication sharedApplication];
-        id appHistory = objcInvoke(sharedApp, @"_currentAppHistory");
-
-        NSString *previousBundleID = nil;
-        NSArray *orderedAppHistory = objcInvoke(appHistory, @"orderedAppHistory");
-        if ([orderedAppHistory count] > 0)
-        {
-            previousBundleID = objcInvoke([orderedAppHistory firstObject], @"bundleIdentifier");
-        }
-        ((void (*)(id, SEL, id, id))objc_msgSend)(appHistory, NSSelectorFromString(@"_bundleIdentifierDidBecomeVisible:previousBundleIdentifier:"), bundleID, previousBundleID);
-
-        id dashboardRootController = objcInvoke(objcInvoke(sharedApp, @"_currentDashboard"), @"rootViewController");
-        id dockController = objcInvoke(dashboardRootController, @"appDockViewController");
-        objcInvoke(dockController, @"_refreshAppDock");
+    id icon = objcInvoke(self, @"icon");
+    NSString *bundleID = [icon respondsToSelector:NSSelectorFromString(@"applicationBundleID")] ? objcInvoke(icon, @"applicationBundleID") : nil;
+    if (bundleID)
+    {
+        requestCarplayLaunch(bundleID);
     }
 }
 
-- (id)initWithConfigurationOptions:(unsigned long long)arg1 listLayoutProvider:(id)arg2
+- (id)initWithConfigurationOptions:(unsigned long long)options listLayoutProvider:(id)layoutProvider
 {
     id iconView = %orig;
 
-    // Add long press gesture to the dashboard's icons
-    UILongPressGestureRecognizer *launchGesture = [[UILongPressGestureRecognizer alloc] initWithTarget:iconView action:NSSelectorFromString(@"handleLaunchAppInNormalMode:")];
+    UILongPressGestureRecognizer *launchGesture = [[[UILongPressGestureRecognizer alloc] initWithTarget:iconView action:NSSelectorFromString(@"handleLaunchAppInNormalMode:")] autorelease];
     [launchGesture setMinimumPressDuration:1.5];
     [iconView addGestureRecognizer:launchGesture];
 
@@ -305,6 +259,20 @@ will launch their normal Carplay mode UI
 
 %end
 
+/*
+The app list and icon layout are built once per process. Restart CarPlay (launchd brings it back)
+a moment after the last preference change so toggling several apps only restarts it once.
+*/
+static void scheduleCarplayRestart(void)
+{
+    static NSTimer *restartTimer;
+    [restartTimer invalidate];
+    [restartTimer release];
+    restartTimer = [[NSTimer scheduledTimerWithTimeInterval:2.0 repeats:NO block:^(NSTimer *timer) {
+        NSLog(@"[carplayenable] restarting CarPlay to apply preference changes");
+        exit(0);
+    }] retain];
+}
 
 %ctor {
     BAIL_IF_UNSUPPORTED_IOS;
@@ -314,4 +282,12 @@ will launch their normal Carplay mode UI
     }
 
     %init(CARPLAY);
+
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:PREFERENCES_CHANGED_NOTIFICATION object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+        [[CRPreferences sharedInstance] reloadPreferences];
+        if ([note.object isEqualToString:kPrefsAppLibraryChanged] || [note.object isEqualToString:kPrefsIconLayoutChanged])
+        {
+            scheduleCarplayRestart();
+        }
+    }];
 }

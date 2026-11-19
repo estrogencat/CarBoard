@@ -5,8 +5,8 @@
 #include "CRPreferences.h"
 #include <substrate.h>
 
-#define MIN_SUPPORTED_IOS_MAJOR 16
-#define MAX_SUPPORTED_IOS_MAJOR 16
+#define MIN_SUPPORTED_IOS_MAJOR 18
+#define MAX_SUPPORTED_IOS_MAJOR 18
 
 #define BAIL_IF_UNSUPPORTED_IOS { \
     NSInteger majorVersion = [NSProcessInfo processInfo].operatingSystemVersion.majorVersion; \
@@ -54,6 +54,20 @@ __unused static void LogSelectorError(id object, SEL selector) {
 #define objcInvoke_2(a, b, c, d) ((id (*)(id, SEL, typeof(c), typeof(d)))objc_msgSend)(a, NSSelectorFromString(b), c, d)
 #define objcInvoke_3(a, b, c, d, e) ((id (*)(id, SEL, typeof(c), typeof(d), typeof(e)))objc_msgSend)(a, NSSelectorFromString(b), c, d, e)
 
+// only sends if the target implements it (avoids unrecognized-selector crashes in SpringBoard)
+#define objcInvokeIf_1(a, b, c) do { SEL _s = NSSelectorFromString(b); if ([(a) respondsToSelector:_s]) ((void (*)(id, SEL, typeof(c)))objc_msgSend)(a, _s, c); else LogSelectorError(a, _s); } while (0)
+
+// bundle id of the process behind an FBScene; 18.x dropped -client
+static inline NSString *CRBundleIDForScene(id scene) {
+    if (!scene) return nil;
+    if ([scene respondsToSelector:NSSelectorFromString(@"clientProcess")]) {
+        NSString *bid = [[scene valueForKey:@"clientProcess"] valueForKey:@"bundleIdentifier"];
+        if (bid) return bid;
+    }
+    id handle = [scene respondsToSelector:NSSelectorFromString(@"clientHandle")] ? [scene valueForKey:@"clientHandle"] : nil;
+    return [handle valueForKey:@"bundleIdentifier"];
+}
+
 #define assertGotExpectedObject(obj, type) if (!obj || ![obj isKindOfClass:NSClassFromString(type)]) [NSException raise:@"UnexpectedObjectException" format:@"Expected %@ but got %@", type, obj]
 
 #define kPropertyKey_liveCarplayWindow *NSSelectorFromString(@"liveCarplayWindow")
@@ -61,7 +75,8 @@ __unused static void LogSelectorError(id object, SEL selector) {
 static char *kPropertyKey_didDrawPlaceholder;
 
 // Preferences
-#define PREFERENCES_PLIST_PATH @"/var/jb/Library/Preferences/com.carplayenable.preferences.plist"
+// /var/jb/Library/Preferences is root-owned, the prefs pane (mobile) can't write there
+#define PREFERENCES_PLIST_PATH @"/var/mobile/Library/Preferences/com.carplayenable.preferences.plist"
 #define PREFERENCES_CHANGED_NOTIFICATION @"com.carplay.preferences.changed"
 #define PREFERENCES_APP_DATA_NOTIFICATION @"com.carplay.prefs.app_data"
 #define kPrefsAppDataRequesting @"Requesting"

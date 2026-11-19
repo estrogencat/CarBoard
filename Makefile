@@ -1,14 +1,14 @@
 ARCHS = arm64 arm64e
 TARGET = iphone:16.5:16.5
 
+THEOS_PACKAGE_SCHEME = rootless
+
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = carplayenable
-carplayenable_FILES = $(wildcard src/hooks/*.xm) $(wildcard src/*.mm) $(wildcard src/crash_reporting/*.mm)
-carplayenable_PRIVATE_FRAMEWORKS += CoreSymbolication
+carplayenable_FILES = $(wildcard src/hooks/*.xm) $(wildcard src/*.mm)
 carplayenable_CFLAGS = -Wno-deprecated-declarations
 
-THEOS_PACKAGE_SCHEME=rootless
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 

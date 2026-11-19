@@ -44,8 +44,8 @@ id getCarplayCADisplay(void)
 
         if (_drawOnMainScreen)
         {
-            self.rootWindow = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
-            ((void (*)(id, SEL, int, int, int, int))objc_msgSend)(self.rootWindow, NSSelectorFromString(@"_rotateWindowToOrientation:updateStatusBar:duration:skipCallbacks:"), 3, 1, 0, 0);
+            self.rootWindow = [[[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]] autorelease];
+            ((void (*)(id, SEL, long long, BOOL, double, BOOL))objc_msgSend)(self.rootWindow, NSSelectorFromString(@"_rotateWindowToOrientation:updateStatusBar:duration:skipCallbacks:"), 3, YES, 0.0, NO);
         }
         else
         {
@@ -63,7 +63,7 @@ id getCarplayCADisplay(void)
             NSLog(@"carplayenable: Creating window with display configuration: %@", displayConfiguration);
 
             // Create window on the Carplay screen
-            self.rootWindow = objcInvoke_1([objc_getClass("UIRootSceneWindow") alloc], @"initWithDisplayConfiguration:", displayConfiguration);
+            self.rootWindow = [objcInvoke_1([objc_getClass("UIRootSceneWindow") alloc], @"initWithDisplayConfiguration:", displayConfiguration) autorelease];
         }
 
         [self.rootWindow.layer setCornerRadius:13.0f];
@@ -103,17 +103,9 @@ id getCarplayCADisplay(void)
 
         // Add a placeholder "this app is on the carplay screen" view onto the app on the main screen
         id currentSceneHandle = objcInvoke(self.appViewController, @"sceneHandle");
-        id mainSceneLayoutController = objcInvoke(objc_getClass("SBMainDisplaySceneLayoutViewController"), @"mainDisplaySceneLayoutViewController");
-        id liveAppSceneControllers = objcInvoke(mainSceneLayoutController, @"appViewControllers");
-        for (id appSceneLayoutController in liveAppSceneControllers)
+        for (id appSceneView in CRSceneViewsForSceneHandle(currentSceneHandle, self.rootWindow))
         {
-            id appSceneController = objcInvoke(appSceneLayoutController, @"_applicationSceneViewController");
-            id appSceneView = objcInvoke(appSceneController, @"_sceneView");
-            id appSceneHandle = objcInvoke(appSceneView, @"sceneHandle");
-            if ([appSceneHandle isEqual:currentSceneHandle])
-            {
-                objcInvoke(appSceneView, @"drawCarplayPlaceholder");
-            }
+            objcInvoke(appSceneView, @"drawCarplayPlaceholder");
         }
 
         // Add observer the user changing the Dock's Alignment via preferences
@@ -262,11 +254,11 @@ id getCarplayCADisplay(void)
     self.shouldGenerateSnapshot = UIInterfaceOrientationIsPortrait((UIInterfaceOrientation)objcInvokeT(appSnapshot, @"interfaceOrientation", int));
 
     // Get the image from the chosen snapshot
-    id appSnapshotImage = objcInvoke_1(appSnapshot, @"imageForInterfaceOrientation:", 1);
+    id appSnapshotImage = appSnapshot ? objcInvoke_1(appSnapshot, @"imageForInterfaceOrientation:", (long long)1) : nil;
 
     // Build an imageview to contain the launch image.
     // The processLaunched handler defined above is responsible for cleaning this up
-    self.launchImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, [[self appContainerView] frame].size.width, [[self appContainerView] frame].size.height)];
+    self.launchImageView = [[[UIImageView alloc] initWithFrame:CGRectMake(0, 0, [[self appContainerView] frame].size.width, [[self appContainerView] frame].size.height)] autorelease];
     [self.launchImageView setImage:appSnapshotImage];
     [self.launchImageView setContentMode:UIViewContentModeScaleToFill];
     [[self appContainerView] addSubview:self.launchImageView];
@@ -299,6 +291,10 @@ id getCarplayCADisplay(void)
     else if ([displaySceneManager respondsToSelector:NSSelectorFromString(@"_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:")]) {
         sceneIdentity = objcInvoke_3(displaySceneManager, @"_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:", self.application, 1, @"UIWindowSceneSessionRoleApplication");
     }
+    else if ([displaySceneManager respondsToSelector:NSSelectorFromString(@"sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:")]) {
+        // 18.x
+        sceneIdentity = ((id (*)(id, SEL, id, BOOL, id))objc_msgSend)(displaySceneManager, NSSelectorFromString(@"sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:"), self.application, YES, @"UIWindowSceneSessionRoleApplication");
+    }
     else if ([displaySceneManager respondsToSelector:NSSelectorFromString(@"newSceneIdentityForApplication:")]) {
         sceneIdentity = objcInvoke_1(displaySceneManager, @"newSceneIdentityForApplication:", self.application);
     }
@@ -313,11 +309,11 @@ id getCarplayCADisplay(void)
     id appSceneEntity = objcInvoke_1([objc_getClass("SBDeviceApplicationSceneEntity") alloc], @"initWithApplicationSceneHandle:", sceneHandle);
     assertGotExpectedObject(appSceneEntity, @"SBDeviceApplicationSceneEntity");
 
-    self.appViewController = objcInvoke_2([objc_getClass("SBAppViewController") alloc], @"initWithIdentifier:andApplicationSceneEntity:", appIdentifier, appSceneEntity);
+    self.appViewController = [objcInvoke_2([objc_getClass("SBAppViewController") alloc], @"initWithIdentifier:andApplicationSceneEntity:", appIdentifier, appSceneEntity) autorelease];
     assertGotExpectedObject(self.appViewController, @"SBAppViewController");
-    objcInvoke_1(self.appViewController, @"setIgnoresOcclusions:", 0);
-    objcInvoke_1(self.appViewController, @"setAutomatesLifecycle:", 0);
-    objcInvoke_1(self.appViewController, @"setRequestedMode:", @(2));
+    objcInvoke_1(self.appViewController, @"setIgnoresOcclusions:", NO);
+    objcInvokeIf_1(self.appViewController, @"setAutomatesLifecycle:", NO);
+    objcInvokeIf_1(self.appViewController, @"setRequestedMode:", (long long)2);
     objcInvoke(getIvar(self.appViewController, @"_activationSettings"), @"clearActivationSettings");
 
     id sceneUpdateTransaction = objcInvoke_2(self.appViewController, @"_createSceneUpdateTransactionForApplicationSceneEntity:deliveringActions:", appSceneEntity, 1);
@@ -347,15 +343,13 @@ id getCarplayCADisplay(void)
                     return;
                 }
 
-                id sceneSettings = objcInvoke(appScene, @"settings");
-                sceneSettings = objcInvoke(sceneSettings, @"mutableCopy");
+                id sceneSettings = [objcInvoke(objcInvoke(appScene, @"settings"), @"mutableCopy") autorelease];
                 assertGotExpectedObject(sceneSettings, @"UIMutableApplicationSceneSettings");
 
-                objcInvoke_1(sceneSettings, @"setForeground:", 1);
-                objcInvoke_1(sceneSettings, @"setInterfaceOrientation:", self.orientation);
-                objcInvoke_1(sceneSettings, @"setDeviceOrientation:", self.orientation);
-                objcInvoke_1(sceneSettings, @"setInterfaceOrientation:", self.orientation);
-
+                long long orientation = self.orientation;
+                objcInvokeIf_1(sceneSettings, @"setForeground:", YES);
+                objcInvokeIf_1(sceneSettings, @"setInterfaceOrientation:", orientation);
+                objcInvokeIf_1(sceneSettings, @"setDeviceOrientation:", orientation);
 
                ((void (*)(id, SEL, id, id, id))objc_msgSend)(appScene, NSSelectorFromString(@"updateSettings:withTransitionContext:completion:"), sceneSettings, nil, ^{});
 
@@ -366,8 +360,8 @@ id getCarplayCADisplay(void)
 
                     id snapshotContext = objcInvoke_2(objc_getClass("FBSSceneSnapshotContext"), @"contextWithSceneID:settings:", objcInvoke(appScene, @"identifier"), sceneSettings);
                     objcInvoke_1(snapshotContext, @"setName:", @"CarPlayLaunchImage");
-                    objcInvoke_1(snapshotContext, @"setScale:", 2);
-                    objcInvoke_1(snapshotContext, @"setExpirationInterval:", 99999);
+                    objcInvokeIf_1(snapshotContext, @"setScale:", (double)2.0);
+                    objcInvokeIf_1(snapshotContext, @"setExpirationInterval:", (double)99999.0);
                     objcInvoke_3(self.application, @"saveSnapshotForSceneHandle:context:completion:", sceneHandle, snapshotContext, nil);
                 }
             });
@@ -385,20 +379,25 @@ id getCarplayCADisplay(void)
     assertGotExpectedObject(animationFactory, @"BSUIAnimationFactory");
 
     id appView = objcInvoke(self.appViewController, @"appView");
-    objcInvoke_3(appView, @"setDisplayMode:animationFactory:completion:", 4, animationFactory, 0);
+    objcInvoke_3(appView, @"setDisplayMode:animationFactory:completion:", (long long)4, animationFactory, nil);
     [[self.appViewController view] setBackgroundColor:[UIColor clearColor]];
 
     // Create a scene monitor to watch for the app process dying. The carplay window will dismiss itself.
-    // todo: this returns nil if the app process isn't running..
-    NSString *sceneID = nil;
-    if ([sceneLayoutManager respondsToSelector:NSSelectorFromString(@"primarySceneIdentifierForBundleIdentifier:")]) {
+    NSString *sceneID = objcInvoke(sceneIdentity, @"identifier");
+    if (sceneID) {
+        // the identity we created the scene with already knows its id
+    }
+    else if ([sceneLayoutManager respondsToSelector:NSSelectorFromString(@"primarySceneIdentifierForBundleIdentifier:sceneSessionRole:displayIdentity:")]) {
+        sceneID = objcInvoke_3(sceneLayoutManager, @"primarySceneIdentifierForBundleIdentifier:sceneSessionRole:displayIdentity:", appIdentifier, @"UIWindowSceneSessionRoleApplication", mainScreenIdentity);
+    }
+    else if ([sceneLayoutManager respondsToSelector:NSSelectorFromString(@"primarySceneIdentifierForBundleIdentifier:")]) {
         sceneID = objcInvoke_1(sceneLayoutManager, @"primarySceneIdentifierForBundleIdentifier:", appIdentifier);
     }
     else if ([sceneLayoutManager respondsToSelector:NSSelectorFromString(@"primarySceneIdentifierForBundleIdentifier:sceneSessionRole:")]) {
         sceneID = objcInvoke_2(sceneLayoutManager, @"primarySceneIdentifierForBundleIdentifier:sceneSessionRole:", appIdentifier, @"UIWindowSceneSessionRoleApplication");
     }
 
-    self.sceneMonitor = objcInvoke_1([objc_getClass("FBSceneMonitor") alloc], @"initWithSceneID:", sceneID);
+    self.sceneMonitor = [objcInvoke_1([objc_getClass("FBSceneMonitor") alloc], @"initWithSceneID:", sceneID) autorelease];
     objcInvoke_1(self.sceneMonitor, @"setDelegate:", self);
 }
 
@@ -475,46 +474,40 @@ When a CarPlay App is closed
         [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.orientation" object:hostedIdentifier userInfo:@{@"orientation": @(resetOrientationLock)}];
 
         [self.rootWindow setHidden:YES];
-        objcInvoke_1(self.appViewController, @"_setCurrentMode:", 0);
+        objcInvoke_1(self.appViewController, @"_setCurrentMode:", (long long)0);
 
         // Find the main sceen's sceneView for the dismissing app and put it in LiveContent mode (from PlaceHolder mode)
         // This removes the placeholder view visible in the app switcher
         id currentSceneHandle = objcInvoke(self.appViewController, @"sceneHandle");
-        id mainSceneLayoutController = objcInvoke(objc_getClass("SBMainDisplaySceneLayoutViewController"), @"mainDisplaySceneLayoutViewController");
-        id liveAppSceneControllers = objcInvoke(mainSceneLayoutController, @"appViewControllers");
-        for (id appSceneLayoutController in liveAppSceneControllers)
+        for (id appSceneView in CRSceneViewsForSceneHandle(currentSceneHandle, self.rootWindow))
         {
-            id appSceneController = objcInvoke(appSceneLayoutController, @"_applicationSceneViewController");
-            id appSceneView = objcInvoke(appSceneController, @"_sceneView");
-            id appSceneHandle = objcInvoke(appSceneView, @"sceneHandle");
-            if ([appSceneHandle isEqual:currentSceneHandle])
-            {
-                objcInvoke_3(appSceneView, @"setDisplayMode:animationFactory:completion:", 4, nil, nil);
-            }
+            objcInvoke_3(appSceneView, @"setDisplayMode:animationFactory:completion:", (long long)4, nil, nil);
         }
 
         id sharedApp = [UIApplication sharedApplication];
 
         // After the scene returns to the device, release the assertion that prevents suspension
         NSMutableArray *lockAssertions = objc_getAssociatedObject(sharedApp, &kPropertyKey_lockAssertionIdentifiers);
-        id appScene = objcInvoke(objcInvoke(self.appViewController, @"sceneHandle"), @"sceneIfExists");
+        NSString *hostedBundleID = objcInvoke(self.application, @"bundleIdentifier");
+        if (hostedBundleID)
+        {
+            [lockAssertions removeObject:hostedBundleID];
+        }
+
+        id appScene = objcInvoke(currentSceneHandle, @"sceneIfExists");
         if (appScene != nil)
         {
-            NSString *sceneAppBundleID = objcInvoke(objcInvoke(objcInvoke(appScene, @"client"), @"process"), @"bundleIdentifier");
-            [lockAssertions removeObject:sceneAppBundleID];
-
             // Send the app to the background *if it is not on the main screen*
             id frontmostApp = objcInvoke(sharedApp, @"_accessibilityFrontMostApplication");
-            BOOL isAppOnMainScreen = frontmostApp && [objcInvoke(frontmostApp, @"bundleIdentifier") isEqualToString:sceneAppBundleID];
+            BOOL isAppOnMainScreen = frontmostApp && [objcInvoke(frontmostApp, @"bundleIdentifier") isEqualToString:hostedBundleID];
             if (!isAppOnMainScreen)
             {
-                id sceneSettings = objcInvoke(appScene, @"settings");
-                sceneSettings = objcInvoke(sceneSettings, @"mutableCopy");
-                assertGotExpectedObject(sceneSettings, @"UIMutableApplicationSceneSettings");
-
-                // objcInvoke_1(sceneSettings, @"setBackgrounded:", 1);
-                objcInvoke_1(sceneSettings, @"setForeground:", 0);
-               ((void (*)(id, SEL, id, id, id))objc_msgSend)(appScene, NSSelectorFromString(@"updateSettings:withTransitionContext:completion:"), sceneSettings, nil, ^{});
+                id sceneSettings = [objcInvoke(objcInvoke(appScene, @"settings"), @"mutableCopy") autorelease];
+                if ([sceneSettings isKindOfClass:objc_getClass("UIMutableApplicationSceneSettings")])
+                {
+                    objcInvokeIf_1(sceneSettings, @"setForeground:", NO);
+                    ((void (*)(id, SEL, id, id, id))objc_msgSend)(appScene, NSSelectorFromString(@"updateSettings:withTransitionContext:completion:"), sceneSettings, nil, ^{});
+                }
             }
         }
 
@@ -522,19 +515,24 @@ When a CarPlay App is closed
         if (objcInvokeT(sharedApp, @"isLocked", BOOL) == YES)
         {
             void *_BKSHIDServicesGetBacklightFactor = dlsym(RTLD_DEFAULT, "BKSHIDServicesGetBacklightFactor");
-            float backlightFactor = ((float (*)(void))_BKSHIDServicesGetBacklightFactor)();
+            float backlightFactor = _BKSHIDServicesGetBacklightFactor ? ((float (*)(void))_BKSHIDServicesGetBacklightFactor)() : 1.0f;
             if (backlightFactor < 0.2 && orig_BKSDisplayServicesSetScreenBlanked)
             {
                 orig_BKSDisplayServicesSetScreenBlanked(1);
             }
         }
 
-        objc_setAssociatedObject(sharedApp, &kPropertyKey_liveCarplayWindow, nil, OBJC_ASSOCIATION_RETAIN);
         // todo: resign first responder (kb causes glitches on return)
-
         [self.rootWindow removeFromSuperview];
-        [self.rootWindow release];
+        // the property owns the window; releasing it here as well was an over-release
         self.rootWindow = nil;
+
+        // a new window may already have replaced this one (switching apps), don't clear that one.
+        // drops the last reference to self, keep it last
+        if (objc_getAssociatedObject(sharedApp, &kPropertyKey_liveCarplayWindow) == self)
+        {
+            objc_setAssociatedObject(sharedApp, &kPropertyKey_liveCarplayWindow, nil, OBJC_ASSOCIATION_RETAIN);
+        }
     };
 
     [UIView animateWithDuration:0.5 animations:^(void)
@@ -561,7 +559,7 @@ When the "rotate orientation" button is pressed on a CarplayEnabled app window
         return;
     }
 
-    NSString *sceneAppBundleID = objcInvoke(objcInvoke(objcInvoke(appScene, @"client"), @"process"), @"bundleIdentifier");
+    NSString *sceneAppBundleID = CRBundleIDForScene(appScene) ?: objcInvoke(self.application, @"bundleIdentifier");
 
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.orientation" object:sceneAppBundleID userInfo:@{@"orientation": @(desiredOrientation)}];
     [self resizeAppViewForOrientation:desiredOrientation fullscreen:self.isFullscreen forceUpdate:NO];
@@ -577,6 +575,10 @@ Handle resizing the Carplay App window. Called anytime the app orientation chang
     if (!forceUpdate && desiredOrientation == self.orientation && self.isFullscreen == fullscreen) {
         return;
     }
+
+    // set before touching the scene: the FBScene hook reads the window's orientation
+    self.orientation = desiredOrientation;
+    self.isFullscreen = fullscreen;
 
     id deviceVC = getIvar(self.appViewController, @"_deviceAppViewController");
     ((void (*)(id, SEL, unsigned long long))objc_msgSend)(deviceVC, NSSelectorFromString(@"setHomeGrabberDisplayMode:"), 1);
@@ -596,12 +598,15 @@ Handle resizing the Carplay App window. Called anytime the app orientation chang
             return;
         }
 
-        id settings = objcInvoke(objcInvoke(appScene, @"settings"), @"mutableCopy");
+        id settings = [objcInvoke(objcInvoke(appScene, @"settings"), @"mutableCopy") autorelease];
 
-        objcInvoke_1(settings, @"setForeground:", 1);
-        objcInvoke_1(settings, @"setInterfaceOrientation:", desiredOrientation);
-        objcInvoke_1(settings, @"setDeviceOrientation:", desiredOrientation);
-        ((void (*)(id, SEL, CGRect))objc_msgSend)(settings, sel_registerName("setFrame:"), sceneFrame);
+        long long orientation = desiredOrientation;
+        objcInvokeIf_1(settings, @"setForeground:", YES);
+        objcInvokeIf_1(settings, @"setInterfaceOrientation:", orientation);
+        objcInvokeIf_1(settings, @"setDeviceOrientation:", orientation);
+        if ([settings respondsToSelector:NSSelectorFromString(@"setFrame:")]) {
+            ((void (*)(id, SEL, CGRect))objc_msgSend)(settings, NSSelectorFromString(@"setFrame:"), sceneFrame);
+        }
 
         ((void (*)(id, SEL, id, id, id))objc_msgSend)(appScene, NSSelectorFromString(@"updateSettings:withTransitionContext:completion:"), settings, nil, ^{});
         NSLog(@"carplayenable: scene geometry %@", settings);
