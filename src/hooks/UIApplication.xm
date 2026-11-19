@@ -6,6 +6,77 @@ Injected into User Applications
 %group APPS
 
 static int orientationOverride = -1;
+// height SpringBoard draws the keyboard at on the CarPlay screen, in window points (0 until it says)
+static CGFloat carplayKeyboardHeight;
+// the system's userInfo for the keyboard currently on screen, to re-report it when that height changes
+static NSDictionary *visibleKeyboardInfo;
+
+static NSString *const kCRPatchedKeyboardInfoKey = @"CRCarplayKeyboardFrame";
+
+static BOOL CRIsKeyboardFrameNotification(NSString *name)
+{
+    return [name isEqualToString:UIKeyboardWillShowNotification] || [name isEqualToString:UIKeyboardDidShowNotification] ||
+        [name isEqualToString:UIKeyboardWillHideNotification] || [name isEqualToString:UIKeyboardDidHideNotification] ||
+        [name isEqualToString:UIKeyboardWillChangeFrameNotification] || [name isEqualToString:UIKeyboardDidChangeFrameNotification];
+}
+
+// the system's frames are in the phone screen's portrait or landscape space; the keyboard spans that space's width
+static BOOL CRKeyboardFrameIsOnScreen(CGRect frame, CGSize screenSize)
+{
+    CGFloat shortSide = MIN(screenSize.width, screenSize.height);
+    CGFloat spaceHeight = frame.size.width > shortSide + 0.5 ? shortSide : MAX(screenSize.width, screenSize.height);
+    return frame.size.height > 0 && CGRectGetMinY(frame) < spaceHeight - 0.5;
+}
+
+/*
+The keyboard reports its frame on the phone's screen, and not even consistently (it can give just the bottom bar),
+but the CarPlay window draws it scaled down along the bottom of the app. Report that frame instead, so the app moves
+its content above what is actually drawn.
+*/
+static NSDictionary *CRCarplayKeyboardUserInfo(NSString *name, NSDictionary *userInfo)
+{
+    // postNotificationName: may land in postNotification:, only patch once
+    UIWindow *keyWindow = objcInvoke([UIApplication sharedApplication], @"keyWindow");
+    if (!keyWindow || userInfo[kCRPatchedKeyboardInfoKey])
+    {
+        return userInfo;
+    }
+
+    CGSize screenSize = keyWindow.screen.bounds.size;
+    BOOL landscape = UIInterfaceOrientationIsLandscape((UIInterfaceOrientation)orientationOverride);
+    CGSize uprightSize = landscape ? CGSizeMake(MAX(screenSize.width, screenSize.height), MIN(screenSize.width, screenSize.height)) : CGSizeMake(MIN(screenSize.width, screenSize.height), MAX(screenSize.width, screenSize.height));
+    CGSize windowSize = keyWindow.bounds.size;
+    BOOL hiding = [name isEqualToString:UIKeyboardWillHideNotification] || [name isEqualToString:UIKeyboardDidHideNotification];
+
+    NSMutableDictionary *patched = [[userInfo mutableCopy] autorelease];
+    patched[kCRPatchedKeyboardInfoKey] = @YES;
+    BOOL endOnScreen = NO;
+    for (NSString *key in @[UIKeyboardFrameBeginUserInfoKey, UIKeyboardFrameEndUserInfoKey])
+    {
+        NSValue *value = userInfo[key];
+        if (!value)
+        {
+            continue;
+        }
+        CGRect frame = [value CGRectValue];
+        // a keyboard that's off the bottom of the phone's screen stays just below the window
+        BOOL onScreen = !hiding && CRKeyboardFrameIsOnScreen(frame, screenSize);
+        if ([key isEqualToString:UIKeyboardFrameEndUserInfoKey])
+        {
+            endOnScreen = onScreen;
+        }
+        CGFloat drawnHeight = carplayKeyboardHeight > 0 ? carplayKeyboardHeight : frame.size.height * CRCarplayKeyboardScale(windowSize, uprightSize, frame.size.height);
+        CGRect windowRect = CGRectMake(0, onScreen ? windowSize.height - drawnHeight : windowSize.height, windowSize.width, drawnHeight);
+        CGRect screenRect = [keyWindow convertRect:windowRect toCoordinateSpace:keyWindow.screen.coordinateSpace];
+        patched[key] = [NSValue valueWithCGRect:screenRect];
+    }
+
+    NSDictionary *nowVisible = endOnScreen ? userInfo : nil;
+    [nowVisible retain];
+    [visibleKeyboardInfo release];
+    visibleKeyboardInfo = nowVisible;
+    return patched;
+}
 
 %hook UIApplication
 
@@ -16,7 +87,9 @@ When the app is launched
 {
     id _self = %orig;
     // Register for "orientation change" notifications
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:_self selector:NSSelectorFromString(@"handleRotationRequest:") name:@"com.carplayenable.orientation" object:[[NSBundle mainBundle] bundleIdentifier]];
+    NSString *bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:_self selector:NSSelectorFromString(@"handleRotationRequest:") name:@"com.carplayenable.orientation" object:bundleIdentifier];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:_self selector:NSSelectorFromString(@"handleCarplayKeyboardHeight:") name:@"com.carplayenable.keyboard" object:bundleIdentifier];
     return _self;
 }
 
@@ -32,6 +105,7 @@ When Carplay window is requesting the app to rotate
     int orientationToRequest = orientationOverride;
     if (orientationToRequest == -1)
     {
+        carplayKeyboardHeight = 0;
         orientationToRequest = [[UIDevice currentDevice] orientation];
         // 0 = unknown, 5/6 = face up/down: not interface orientations
         orientationToRequest = (orientationToRequest < 1 || orientationToRequest > 4) ? 1 : orientationToRequest;
@@ -43,6 +117,50 @@ When Carplay window is requesting the app to rotate
     {
         ((void (*)(id, SEL, long long, double, BOOL))objc_msgSend)(keyWindow, NSSelectorFromString(@"_setRotatableViewOrientation:duration:force:"), orientationToRequest, 0.0, YES);
     }
+}
+
+/*
+SpringBoard drew the keyboard at a new height. Usually that arrives after the system's own keyboard notifications,
+so tell the app again about the keyboard that is up
+*/
+%new
+- (void)handleCarplayKeyboardHeight:(id)notification
+{
+    CGFloat height = [objcInvoke(notification, @"userInfo")[@"height"] doubleValue];
+    if (height <= 0 || fabs(height - carplayKeyboardHeight) < 0.5)
+    {
+        return;
+    }
+    carplayKeyboardHeight = height;
+
+    NSDictionary *keyboardInfo = [[visibleKeyboardInfo retain] autorelease];
+    if (orientationOverride > 0 && keyboardInfo)
+    {
+        [[NSNotificationCenter defaultCenter] postNotificationName:UIKeyboardWillChangeFrameNotification object:nil userInfo:keyboardInfo];
+        [[NSNotificationCenter defaultCenter] postNotificationName:UIKeyboardDidChangeFrameNotification object:nil userInfo:keyboardInfo];
+    }
+}
+
+%end
+
+%hook NSNotificationCenter
+
+- (void)postNotificationName:(NSNotificationName)name object:(id)object userInfo:(NSDictionary *)userInfo
+{
+    if (orientationOverride > 0 && userInfo && CRIsKeyboardFrameNotification(name))
+    {
+        userInfo = CRCarplayKeyboardUserInfo(name, userInfo);
+    }
+    %orig(name, object, userInfo);
+}
+
+- (void)postNotification:(NSNotification *)notification
+{
+    if (orientationOverride > 0 && notification.userInfo && CRIsKeyboardFrameNotification(notification.name))
+    {
+        notification = [NSNotification notificationWithName:notification.name object:notification.object userInfo:CRCarplayKeyboardUserInfo(notification.name, notification.userInfo)];
+    }
+    %orig(notification);
 }
 
 %end

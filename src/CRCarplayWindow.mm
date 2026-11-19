@@ -582,6 +582,8 @@ When a CarPlay App is closed
         {
             objc_setAssociatedObject(sharedApp, &kPropertyKey_liveCarplayWindow, nil, OBJC_ASSOCIATION_RETAIN);
         }
+        // back to the phone, or onto the window that replaced this one
+        CRRelayoutCarplayKeyboards();
     };
 
     [UIView animateWithDuration:0.5 animations:^(void)
@@ -664,6 +666,7 @@ Handle resizing the Carplay App window. Called anytime the app orientation chang
     appView.transform = CGAffineTransformIdentity;
 
     self.dockView.alpha = fullscreen ? 0.0 : 1.0;
+    CRRelayoutCarplayKeyboards();
 
     CRLog(@"layout: screen scale %.2f root %@ container %@ sceneFrame %@ appView %@", self.rootWindow.screen.scale, NSStringFromCGRect(rootBounds), NSStringFromCGRect(self.appContainerView.bounds), NSStringFromCGRect(sceneFrame), NSStringFromCGRect(appView.frame));
 

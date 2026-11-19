@@ -205,6 +205,34 @@ static BOOL CRSceneIsHostedOnCarplay(id scene)
     return sceneAppBundleID && [lockAssertions containsObject:sceneAppBundleID];
 }
 
+static NSString *CRDescribeSceneGeometry(id settings)
+{
+    SEL frameSel = NSSelectorFromString(@"frame");
+    SEL orientationSel = NSSelectorFromString(@"interfaceOrientation");
+    if (![settings respondsToSelector:frameSel] || ![settings respondsToSelector:orientationSel])
+    {
+        return @"(no geometry)";
+    }
+    CGRect frame = ((CGRect (*)(id, SEL))objc_msgSend)(settings, frameSel);
+    long long orientation = ((long long (*)(id, SEL))objc_msgSend)(settings, orientationSel);
+    return [NSString stringWithFormat:@"orientation %lld frame %@", orientation, NSStringFromCGRect(frame)];
+}
+
+// does the scene carry the CarPlay window's orientation and size? (settings properties resolve dynamically on 18.x)
+static BOOL CRSceneSettingsMatchWindow(id settings, CRCarPlayWindow *window)
+{
+    SEL frameSel = NSSelectorFromString(@"frame");
+    SEL orientationSel = NSSelectorFromString(@"interfaceOrientation");
+    if (!window.appContainerView || ![settings respondsToSelector:frameSel] || ![settings respondsToSelector:orientationSel])
+    {
+        return YES;
+    }
+    CGRect frame = ((CGRect (*)(id, SEL))objc_msgSend)(settings, frameSel);
+    long long orientation = ((long long (*)(id, SEL))objc_msgSend)(settings, orientationSel);
+    CGSize wanted = [window sceneFrame].size;
+    return orientation == (long long)window.orientation && fabs(frame.size.width - wanted.width) < 0.5 && fabs(frame.size.height - wanted.height) < 0.5;
+}
+
 /*
 Keep a CarPlay-hosted scene foreground, in the CarPlay window's orientation and sized to its container,
 whatever the main display's layout wants
@@ -238,6 +266,34 @@ static id CRWrapSceneUpdateBlock(id scene, id block)
     } copy] autorelease];
 }
 
+// re-apply the CarPlay geometry next runloop; capped so a setter that stops working can't loop forever
+static void CRScheduleCarplaySceneRestore(id sceneHandle)
+{
+    static CFAbsoluteTime windowStart;
+    static int restoresInWindow;
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - windowStart > 2.0)
+    {
+        windowStart = now;
+        restoresInWindow = 0;
+    }
+    if (++restoresInWindow > 5)
+    {
+        CRLog(@"carplay scene keeps drifting, not restoring again yet");
+        return;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        id currentScene = objcInvoke(sceneHandle, @"sceneIfExists");
+        id mutableSettings = [objcInvoke(objcInvoke(currentScene, @"settings"), @"mutableCopy") autorelease];
+        if (currentScene && mutableSettings && CRSceneIsHostedOnCarplay(currentScene))
+        {
+            CRForceCarplaySceneSettings(mutableSettings);
+            ((void (*)(id, SEL, id, id, id))objc_msgSend)(currentScene, NSSelectorFromString(@"updateSettings:withTransitionContext:completion:"), mutableSettings, nil, ^{});
+        }
+    });
+}
+
 %hook FBScene
 
 /*
@@ -248,6 +304,11 @@ Use this to prevent the App from going to sleep when other applications are laun
 {
     if (CRSceneIsHostedOnCarplay(self))
     {
+        // the main display's layout hands over immutable settings (its phone-sized frame), so force a mutable copy
+        if (![settings isKindOfClass:objc_getClass("UIMutableApplicationSceneSettings")] && [settings isKindOfClass:objc_getClass("UIApplicationSceneSettings")])
+        {
+            settings = [[settings mutableCopy] autorelease];
+        }
         CRForceCarplaySceneSettings(settings);
     }
 
@@ -274,6 +335,7 @@ SBAppViewController asserts ("Something changed the scene's foreground status ou
 goes background while it expects it foreground. The main display's layout transactions do exactly that to a
 CarPlay-hosted app, since it isn't in the phone's layout. If our forcing above missed a path, don't let that
 respring SpringBoard: skip the check for the CarPlay window's controller and bring the scene back next runloop.
+The same goes for the phone's frame and orientation leaking in when the app is opened on the phone.
 */
 - (void)sceneHandle:(id)sceneHandle didUpdateSettingsWithDiff:(id)diff previousSettings:(id)previousSettings
 {
@@ -284,19 +346,16 @@ respring SpringBoard: skip the check for the CarPlay window's controller and bri
         id settings = objcInvoke(appScene, @"settings");
         // settings properties are resolved dynamically on 18.x, so ask with respondsToSelector, not class_getInstanceMethod
         SEL isForegroundSel = NSSelectorFromString(@"isForeground");
-        if (settings && [settings respondsToSelector:isForegroundSel] && !((BOOL (*)(id, SEL))objc_msgSend)(settings, isForegroundSel))
+        BOOL backgrounded = settings && [settings respondsToSelector:isForegroundSel] && !((BOOL (*)(id, SEL))objc_msgSend)(settings, isForegroundSel);
+        BOOL drifted = settings && !CRSceneSettingsMatchWindow(settings, (CRCarPlayWindow *)liveCarplayWindow);
+        if (backgrounded || drifted)
         {
-            NSLog(@"[carplayenable] CarPlay-hosted scene was backgrounded, restoring it instead of asserting");
-            dispatch_async(dispatch_get_main_queue(), ^{
-                id currentScene = objcInvoke(sceneHandle, @"sceneIfExists");
-                id mutableSettings = [objcInvoke(objcInvoke(currentScene, @"settings"), @"mutableCopy") autorelease];
-                if (currentScene && mutableSettings && CRSceneIsHostedOnCarplay(currentScene))
-                {
-                    CRForceCarplaySceneSettings(mutableSettings);
-                    ((void (*)(id, SEL, id, id, id))objc_msgSend)(currentScene, NSSelectorFromString(@"updateSettings:withTransitionContext:completion:"), mutableSettings, nil, ^{});
-                }
-            });
-            return;
+            CRLog(@"carplay scene %@, restoring it", backgrounded ? @"was backgrounded" : [NSString stringWithFormat:@"drifted to %@", CRDescribeSceneGeometry(settings)]);
+            CRScheduleCarplaySceneRestore(sceneHandle);
+            if (backgrounded)
+            {
+                return;
+            }
         }
     }
 
@@ -331,98 +390,145 @@ than the device orientation. Force the switcher to use the device's physical ori
 %end
 
 /*
-This forces the keyboard to be displayed on the Carplay screen instead of the device's main screen. It also scales
-the keyboard to fit the Carplay screen's app container view.
+The keyboard is its own scene, hosted by SpringBoard in SBMedusaHostedKeyboardWindow. It covers the whole phone display,
+in the phone's portrait coordinates, and the keyboard process draws the keyboard in the hosted app's orientation.
+Move it onto the CarPlay window, rotate it upright like the app, and scale it so it fits the app container's width
+without covering more than about half of it.
 */
-%hook SBMedusaHostedKeyboardWindow
+static NSHashTable *carplayKeyboardWindows;
+// height of the keyboard, in its own orientation, from the last keyboard arbiter update
+static CGFloat lastKeyboardHeight;
+static char kCarplayKeyboardContainerKey;
+// where the presentation view lived in the phone's keyboard window
+static char kCarplayKeyboardHomeKey;
 
-- (void)setHidden:(BOOL)hidden {
-    static char kCarplayKeyboardContainerKey;
+static CGFloat CRAngleForInterfaceOrientation(UIInterfaceOrientation orientation)
+{
+    switch (orientation)
+    {
+        case UIInterfaceOrientationLandscapeLeft:
+            return M_PI_2;
+        case UIInterfaceOrientationLandscapeRight:
+            return -M_PI_2;
+        case UIInterfaceOrientationPortraitUpsideDown:
+            return M_PI;
+        default:
+            return 0;
+    }
+}
 
-    UIWindow *keyboardWindow = (UIWindow *)self;
-
-    id liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
-    if (!liveCarplayWindow) {
-        UIView *keyboardContainer = objc_getAssociatedObject(self, &kCarplayKeyboardContainerKey);
-        if (keyboardContainer) {
+// returns NO if there's no CarPlay window (or nothing to host) and the keyboard should stay on the phone
+static BOOL CRLayoutCarplayKeyboard(UIWindow *keyboardWindow)
+{
+    CRCarPlayWindow *liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
+    UIView *keyboardContainer = objc_getAssociatedObject(keyboardWindow, &kCarplayKeyboardContainerKey);
+    UIWindow *carplayRootWindow = liveCarplayWindow.rootWindow;
+    UIView *appContainerView = liveCarplayWindow.appContainerView;
+    id presenter = getIvar(keyboardWindow, @"_remoteHostedKeyboardScenePresenter");
+    UIView *presentationView = [presenter respondsToSelector:NSSelectorFromString(@"presentationView")] ? objcInvoke(presenter, @"presentationView") : nil;
+    if (!carplayRootWindow || !appContainerView || !presentationView)
+    {
+        if (keyboardContainer)
+        {
+            // hand the presentation view back to the phone's keyboard window
+            if (presentationView && presentationView.superview == keyboardContainer)
+            {
+                UIView *originalSuperview = objc_getAssociatedObject(keyboardWindow, &kCarplayKeyboardHomeKey);
+                presentationView.transform = CGAffineTransformIdentity;
+                presentationView.frame = keyboardWindow.bounds;
+                [(originalSuperview.window == keyboardWindow ? originalSuperview : keyboardWindow) addSubview:presentationView];
+            }
             [keyboardContainer removeFromSuperview];
-            objc_setAssociatedObject(self, &kCarplayKeyboardContainerKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(keyboardWindow, &kCarplayKeyboardContainerKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
-
-        %orig(hidden);
-        return;
+        return NO;
     }
 
-    UIWindow *carplayRootWindow = (UIWindow *)objcInvoke(liveCarplayWindow, @"rootWindow");
-    UIView *appContainerView = (UIView *)objcInvoke(liveCarplayWindow, @"appContainerView");
-    if (!carplayRootWindow || !appContainerView) {
-        %orig(hidden);
-        return;
+    if (!carplayKeyboardWindows)
+    {
+        carplayKeyboardWindows = [[NSHashTable weakObjectsHashTable] retain];
     }
+    [carplayKeyboardWindows addObject:keyboardWindow];
 
-    id presenter = getIvar(self, @"_remoteHostedKeyboardScenePresenter");
-    if (!presenter || ![presenter respondsToSelector:sel_registerName("presentationView")]) {
-        %orig(hidden);
-        return;
-    }
-
-    UIView *presentationView = (UIView *)objcInvoke(presenter, @"presentationView");
-    if (!presentationView) {
-        %orig(hidden);
-        return;
-    }
-
-    %orig(NO);
-
-    CGRect targetFrame = [appContainerView.superview convertRect:appContainerView.frame toView:carplayRootWindow];
-
-    CGSize sourceSize = presentationView.bounds.size;
-    if (sourceSize.width <= 0.0 || sourceSize.height <= 0.0) {
-        sourceSize = keyboardWindow.bounds.size;
-    }
-
-    const CGFloat sourceKeyboardHeight = 260.0;
-    CGFloat scaleX = targetFrame.size.width / sourceSize.width;
-    CGFloat wantedKeyboardHeight = targetFrame.size.height * 0.78;
-    CGFloat scaleY = wantedKeyboardHeight / sourceKeyboardHeight;
-    if (scaleY > scaleX) {
-        scaleY = scaleX;
-    }
-
-    CGFloat keyboardHeight = sourceKeyboardHeight * scaleY;
-
-    UIView *keyboardContainer = objc_getAssociatedObject(self, &kCarplayKeyboardContainerKey);
-    if (!keyboardContainer) {
+    if (!keyboardContainer)
+    {
         keyboardContainer = [[[UIView alloc] initWithFrame:CGRectZero] autorelease];
         keyboardContainer.backgroundColor = [UIColor clearColor];
         keyboardContainer.clipsToBounds = YES;
-        keyboardContainer.userInteractionEnabled = YES;
-        objc_setAssociatedObject(self, &kCarplayKeyboardContainerKey, keyboardContainer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(keyboardWindow, &kCarplayKeyboardContainerKey, keyboardContainer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-
-    if (keyboardContainer.superview != carplayRootWindow){
+    if (keyboardContainer.superview != carplayRootWindow)
+    {
         [keyboardContainer removeFromSuperview];
         [carplayRootWindow addSubview:keyboardContainer];
-        NSLog(@"carplayenable: moved keyboard container to new CarPlay root %@", carplayRootWindow);
     }
-
-    keyboardContainer.hidden = NO;
-    keyboardContainer.frame = CGRectMake(targetFrame.origin.x, CGRectGetMaxY(targetFrame) - keyboardHeight, targetFrame.size.width, keyboardHeight);
-
-    if (presentationView.superview != keyboardContainer) {
+    if (presentationView.superview != keyboardContainer)
+    {
+        objc_setAssociatedObject(keyboardWindow, &kCarplayKeyboardHomeKey, presentationView.superview, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [presentationView removeFromSuperview];
         [keyboardContainer addSubview:presentationView];
     }
 
+    UIInterfaceOrientation orientation = liveCarplayWindow.orientation;
+    BOOL landscape = UIInterfaceOrientationIsLandscape(orientation);
+    CGSize sceneSize = keyboardWindow.bounds.size;
+    CGSize uprightSize = landscape ? CGSizeMake(MAX(sceneSize.width, sceneSize.height), MIN(sceneSize.width, sceneSize.height)) : CGSizeMake(MIN(sceneSize.width, sceneSize.height), MAX(sceneSize.width, sceneSize.height));
+    CGFloat keyboardHeight = lastKeyboardHeight;
+    if (keyboardHeight <= 0 || keyboardHeight >= uprightSize.height)
+    {
+        // no arbiter update yet: roughly an iPhone keyboard with its prediction bar
+        keyboardHeight = uprightSize.height * (landscape ? 0.5 : 0.38);
+    }
+
+    CGRect target = [appContainerView.superview convertRect:appContainerView.frame toView:carplayRootWindow];
+    CGFloat scale = CRCarplayKeyboardScale(target.size, uprightSize, keyboardHeight);
+    CGFloat drawnHeight = keyboardHeight * scale;
+
+    keyboardContainer.hidden = NO;
+    keyboardContainer.frame = CGRectMake(target.origin.x, CGRectGetMaxY(target) - drawnHeight, target.size.width, drawnHeight);
+    [carplayRootWindow bringSubviewToFront:keyboardContainer];
+
+    // bottom-aligned and centered: the keyboard sits along the bottom edge of the (upright) scene
     presentationView.transform = CGAffineTransformIdentity;
-    presentationView.bounds = CGRectMake(0, 0, sourceSize.width, sourceSize.height);
-    presentationView.center = CGPointMake(keyboardContainer.bounds.size.width / 2.0, keyboardContainer.bounds.size.height - ((sourceSize.height * scaleY) / 2.0));
-    presentationView.transform = CGAffineTransformMakeScale(scaleX, scaleY);
+    presentationView.bounds = CGRectMake(0, 0, sceneSize.width, sceneSize.height);
+    presentationView.transform = CGAffineTransformScale(CGAffineTransformMakeRotation(CRAngleForInterfaceOrientation(orientation)), scale, scale);
+    presentationView.center = CGPointMake(target.size.width / 2.0, drawnHeight - (uprightSize.height * scale) / 2.0);
     presentationView.hidden = NO;
     presentationView.alpha = 1.0;
     presentationView.userInteractionEnabled = YES;
 
-    [keyboardContainer bringSubviewToFront:presentationView];
+    // the app reports this height to itself in its keyboard notifications, so it moves content above the keyboard.
+    // it ignores repeats, and a relaunched app starts without one, so just send it every time
+    NSString *bundleIdentifier = objcInvoke(liveCarplayWindow.application, @"bundleIdentifier");
+    if (bundleIdentifier)
+    {
+        [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.keyboard" object:bundleIdentifier userInfo:@{@"height": @(drawnHeight)}];
+    }
+    return YES;
+}
+
+void CRRelayoutCarplayKeyboards(void)
+{
+    for (UIWindow *keyboardWindow in [carplayKeyboardWindows allObjects])
+    {
+        CRLayoutCarplayKeyboard(keyboardWindow);
+    }
+}
+
+%hook SBMedusaHostedKeyboardWindow
+
+- (void)setHidden:(BOOL)hidden
+{
+    // SpringBoard hides it since the CarPlay app isn't in the phone's layout, so keep it up while hosting
+    if (objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow"))
+    {
+        %orig(NO);
+        CRLayoutCarplayKeyboard((UIWindow *)self);
+        return;
+    }
+
+    CRLayoutCarplayKeyboard((UIWindow *)self);
+    %orig;
 }
 
 %end
@@ -751,6 +857,35 @@ int hook_BKSDisplayServicesSetScreenBlanked(int arg1)
 
 %end
 
+%group KEYBOARD_ARBITER
+
+%hook _UIKeyboardArbiter
+
+// runs on the arbiter's queue every time a keyboard comes up, changes height or goes down
+- (void)setLastUpdate:(id)update
+{
+    %orig;
+
+    SEL positionSel = NSSelectorFromString(@"keyboardPositionWithIAV");
+    if (![update respondsToSelector:positionSel])
+    {
+        return;
+    }
+    CGRect position = ((CGRect (*)(id, SEL))objc_msgSend)(update, positionSel);
+    if (position.size.height <= 0)
+    {
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        lastKeyboardHeight = position.size.height;
+        CRRelayoutCarplayKeyboards();
+    });
+}
+
+%end
+
+%end
+
 %ctor
 {
     BAIL_IF_UNSUPPORTED_IOS;
@@ -758,6 +893,10 @@ int hook_BKSDisplayServicesSetScreenBlanked(int arg1)
     if ([[[NSBundle mainBundle] bundleIdentifier] isEqualToString:@"com.apple.springboard"])
     {
         %init(SPRINGBOARD);
+        if (objc_getClass("_UIKeyboardArbiter"))
+        {
+            %init(KEYBOARD_ARBITER);
+        }
         // Hook BKSDisplayServicesSetScreenBlanked() - necessary for allowing animations/video when the screen is off
         void *_BKSDisplayServicesSetScreenBlanked = dlsym(dlopen(NULL, 0), "BKSDisplayServicesSetScreenBlanked");
         if (_BKSDisplayServicesSetScreenBlanked)

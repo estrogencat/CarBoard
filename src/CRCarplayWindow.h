@@ -32,3 +32,5 @@ id getCarplayCADisplay(void);
 void CRApplyCarplaySceneSettings(id settings, CRCarPlayWindow *window);
 // main-screen (or any) scene views showing this scene handle, skipping ones inside excludingWindow
 NSArray *CRSceneViewsForSceneHandle(id sceneHandle, UIWindow *excludingWindow);
+// moves or rotates the keyboard to match the CarPlay window, or hands it back to the phone once that is gone
+void CRRelayoutCarplayKeyboards(void);

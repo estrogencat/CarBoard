@@ -114,4 +114,19 @@ static char *kPropertyKey_didDrawPlaceholder;
 
 #define CARPLAY_DOCK_WIDTH 40
 
+/*
+Scale the CarPlay window draws the (phone-sized) keyboard at: as wide as the app container, but never covering more than
+about half of it. SpringBoard uses it to draw the keyboard, the hosted app to report the same keyboard frame.
+*/
+static inline CGFloat CRCarplayKeyboardScale(CGSize containerSize, CGSize uprightScreenSize, CGFloat keyboardHeight)
+{
+    CGFloat scale = containerSize.width / uprightScreenSize.width;
+    CGFloat maxHeight = containerSize.height * 0.55;
+    if (keyboardHeight * scale > maxHeight)
+    {
+        scale = maxHeight / keyboardHeight;
+    }
+    return scale;
+}
+
 extern int (*orig_BKSDisplayServicesSetScreenBlanked)(int);
