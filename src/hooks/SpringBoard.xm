@@ -195,6 +195,63 @@ happen while the device is in a faceup/facedown orientation.
 
 %end
 
+/*
+Is this scene's app currently hosted on the CarPlay screen?
+*/
+static BOOL CRSceneIsHostedOnCarplay(id scene)
+{
+    NSString *sceneAppBundleID = CRBundleIDForScene(scene);
+    NSArray *lockAssertions = objc_getAssociatedObject([UIApplication sharedApplication], &kPropertyKey_lockAssertionIdentifiers);
+    return sceneAppBundleID && [lockAssertions containsObject:sceneAppBundleID];
+}
+
+/*
+Keep a CarPlay-hosted scene foreground, in the CarPlay window's orientation and sized to its container,
+whatever the main display's layout wants
+*/
+static void CRForceCarplaySceneSettings(id settings)
+{
+    if (![settings isKindOfClass:objc_getClass("UIMutableApplicationSceneSettings")])
+    {
+        return;
+    }
+
+    id liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
+    // keep whatever orientation the CarPlay window picked (the rotate button flips it)
+    long long orientation = liveCarplayWindow ? (long long)[(CRCarPlayWindow *)liveCarplayWindow orientation] : (long long)UIInterfaceOrientationLandscapeLeft;
+
+    objcInvokeIf_1(settings, @"setForeground:", YES);
+    objcInvokeIf_1(settings, @"setInterfaceOrientation:", orientation);
+    objcInvokeIf_1(settings, @"setDeviceOrientation:", orientation);
+
+    UIView *container = [liveCarplayWindow appContainerView];
+    if (container && [settings respondsToSelector:NSSelectorFromString(@"setFrame:")])
+    {
+        ((void (*)(id, SEL, CGRect))objc_msgSend)(settings, NSSelectorFromString(@"setFrame:"), container.bounds);
+    }
+}
+
+/*
+18.x mostly updates scenes through block-based APIs (updateUISettingsWithBlock: and friends) that never hit
+updateSettings:withTransitionContext:completion:. Wrap the caller's block so the forced settings are applied after it.
+The wrapper takes/returns enough for both the (settings) and (settings, transitionContext) block shapes.
+*/
+static id CRWrapSceneUpdateBlock(id scene, id block)
+{
+    if (!block || !CRSceneIsHostedOnCarplay(scene))
+    {
+        return block;
+    }
+
+    id (^originalBlock)(id, id) = block;
+    return [[^id(id arg1, id arg2) {
+        id result = originalBlock(arg1, arg2);
+        CRForceCarplaySceneSettings(arg1);
+        CRForceCarplaySceneSettings(arg2);
+        return result;
+    } copy] autorelease];
+}
+
 %hook FBScene
 
 /*
@@ -203,24 +260,61 @@ Use this to prevent the App from going to sleep when other applications are laun
 */
 - (void)updateSettings:(id)settings withTransitionContext:(id)arg2 completion:(id)arg3
 {
-    NSString *sceneAppBundleID = CRBundleIDForScene(self);
-    NSArray *lockAssertions = objc_getAssociatedObject([UIApplication sharedApplication], &kPropertyKey_lockAssertionIdentifiers);
-    if (sceneAppBundleID && [lockAssertions containsObject:sceneAppBundleID] && [settings isKindOfClass:objc_getClass("UIMutableApplicationSceneSettings")]) {
-        id liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
-        // keep whatever orientation the CarPlay window picked (the rotate button flips it)
-        long long orientation = liveCarplayWindow ? (long long)[(CRCarPlayWindow *)liveCarplayWindow orientation] : (long long)UIInterfaceOrientationLandscapeLeft;
-
-        objcInvokeIf_1(settings, @"setForeground:", YES);
-        objcInvokeIf_1(settings, @"setInterfaceOrientation:", orientation);
-        objcInvokeIf_1(settings, @"setDeviceOrientation:", orientation);
-
-        UIView *container = [liveCarplayWindow appContainerView];
-        if (container && [settings respondsToSelector:NSSelectorFromString(@"setFrame:")]) {
-            ((void (*)(id, SEL, CGRect))objc_msgSend)(settings, NSSelectorFromString(@"setFrame:"), container.bounds);
-        }
+    if (CRSceneIsHostedOnCarplay(self))
+    {
+        CRForceCarplaySceneSettings(settings);
     }
 
     %orig(settings, arg2, arg3);
+}
+
+// updateUISettingsWithBlock: -> updateSettingsWithBlock: -> here
+- (void)updateSettings:(id)settingsBlock
+{
+    %orig(CRWrapSceneUpdateBlock(self, settingsBlock));
+}
+
+- (void)performUpdate:(id)updateBlock withCompletion:(id)completion
+{
+    %orig(CRWrapSceneUpdateBlock(self, updateBlock), completion);
+}
+
+%end
+
+%hook SBAppViewController
+
+/*
+SBAppViewController asserts ("Something changed the scene's foreground status out from underneath us") if its scene
+goes background while it expects it foreground. The main display's layout transactions do exactly that to a
+CarPlay-hosted app, since it isn't in the phone's layout. If our forcing above missed a path, don't let that
+respring SpringBoard: skip the check for the CarPlay window's controller and bring the scene back next runloop.
+*/
+- (void)sceneHandle:(id)sceneHandle didUpdateSettingsWithDiff:(id)diff previousSettings:(id)previousSettings
+{
+    id liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
+    if (liveCarplayWindow && self == [(CRCarPlayWindow *)liveCarplayWindow appViewController])
+    {
+        id appScene = objcInvoke(sceneHandle, @"sceneIfExists");
+        id settings = objcInvoke(appScene, @"settings");
+        // settings properties are resolved dynamically on 18.x, so ask with respondsToSelector, not class_getInstanceMethod
+        SEL isForegroundSel = NSSelectorFromString(@"isForeground");
+        if (settings && [settings respondsToSelector:isForegroundSel] && !((BOOL (*)(id, SEL))objc_msgSend)(settings, isForegroundSel))
+        {
+            NSLog(@"[carplayenable] CarPlay-hosted scene was backgrounded, restoring it instead of asserting");
+            dispatch_async(dispatch_get_main_queue(), ^{
+                id currentScene = objcInvoke(sceneHandle, @"sceneIfExists");
+                id mutableSettings = [objcInvoke(objcInvoke(currentScene, @"settings"), @"mutableCopy") autorelease];
+                if (currentScene && mutableSettings && CRSceneIsHostedOnCarplay(currentScene))
+                {
+                    CRForceCarplaySceneSettings(mutableSettings);
+                    ((void (*)(id, SEL, id, id, id))objc_msgSend)(currentScene, NSSelectorFromString(@"updateSettings:withTransitionContext:completion:"), mutableSettings, nil, ^{});
+                }
+            });
+            return;
+        }
+    }
+
+    %orig;
 }
 
 %end
