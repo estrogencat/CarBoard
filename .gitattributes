@@ -1,0 +1,5 @@
+# theos/WSL builds and on-device scripts need LF (CRLF broke the postinst shebang)
+* text=auto eol=lf
+*.png binary
+*.gif binary
+*.deb binary
