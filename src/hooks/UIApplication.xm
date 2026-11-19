@@ -8,8 +8,10 @@ Injected into User Applications
 static int orientationOverride = -1;
 // height SpringBoard draws the keyboard at on the CarPlay screen, in window points (0 until it says)
 static CGFloat carplayKeyboardHeight;
-// the system's userInfo for the keyboard currently on screen, to re-report it when that height changes
+// the system's userInfo and object (its UIScreen) for the keyboard currently on screen, to re-report it when that
+// height changes. Telegram only measures against its own window when the object is a screen
 static NSDictionary *visibleKeyboardInfo;
+static id visibleKeyboardObject;
 
 static NSString *const kCRPatchedKeyboardInfoKey = @"CRCarplayKeyboardFrame";
 
@@ -33,7 +35,7 @@ The keyboard reports its frame on the phone's screen, and not even consistently 
 but the CarPlay window draws it scaled down along the bottom of the app. Report that frame instead, so the app moves
 its content above what is actually drawn.
 */
-static NSDictionary *CRCarplayKeyboardUserInfo(NSString *name, NSDictionary *userInfo)
+static NSDictionary *CRCarplayKeyboardUserInfo(NSString *name, id object, NSDictionary *userInfo)
 {
     // postNotificationName: may land in postNotification:, only patch once
     UIWindow *keyWindow = objcInvoke([UIApplication sharedApplication], @"keyWindow");
@@ -75,6 +77,10 @@ static NSDictionary *CRCarplayKeyboardUserInfo(NSString *name, NSDictionary *use
     [nowVisible retain];
     [visibleKeyboardInfo release];
     visibleKeyboardInfo = nowVisible;
+    id nowVisibleObject = endOnScreen ? object : nil;
+    [nowVisibleObject retain];
+    [visibleKeyboardObject release];
+    visibleKeyboardObject = nowVisibleObject;
     return patched;
 }
 
@@ -134,10 +140,11 @@ so tell the app again about the keyboard that is up
     carplayKeyboardHeight = height;
 
     NSDictionary *keyboardInfo = [[visibleKeyboardInfo retain] autorelease];
+    id keyboardObject = [[visibleKeyboardObject retain] autorelease];
     if (orientationOverride > 0 && keyboardInfo)
     {
-        [[NSNotificationCenter defaultCenter] postNotificationName:UIKeyboardWillChangeFrameNotification object:nil userInfo:keyboardInfo];
-        [[NSNotificationCenter defaultCenter] postNotificationName:UIKeyboardDidChangeFrameNotification object:nil userInfo:keyboardInfo];
+        [[NSNotificationCenter defaultCenter] postNotificationName:UIKeyboardWillChangeFrameNotification object:keyboardObject userInfo:keyboardInfo];
+        [[NSNotificationCenter defaultCenter] postNotificationName:UIKeyboardDidChangeFrameNotification object:keyboardObject userInfo:keyboardInfo];
     }
 }
 
@@ -149,7 +156,7 @@ so tell the app again about the keyboard that is up
 {
     if (orientationOverride > 0 && userInfo && CRIsKeyboardFrameNotification(name))
     {
-        userInfo = CRCarplayKeyboardUserInfo(name, userInfo);
+        userInfo = CRCarplayKeyboardUserInfo(name, object, userInfo);
     }
     %orig(name, object, userInfo);
 }
@@ -158,7 +165,7 @@ so tell the app again about the keyboard that is up
 {
     if (orientationOverride > 0 && notification.userInfo && CRIsKeyboardFrameNotification(notification.name))
     {
-        notification = [NSNotification notificationWithName:notification.name object:notification.object userInfo:CRCarplayKeyboardUserInfo(notification.name, notification.userInfo)];
+        notification = [NSNotification notificationWithName:notification.name object:notification.object userInfo:CRCarplayKeyboardUserInfo(notification.name, notification.object, notification.userInfo)];
     }
     %orig(notification);
 }
@@ -184,6 +191,37 @@ Called when a window intends to rotate to a new orientation. Used to force lands
 
 %end
 
+/*
+While the app is on CarPlay the render server keeps reporting its video layers as not visible (its scene belongs to
+the phone's display), and the video renderer stops drawing frames. Keep them visible while hosted.
+*/
+%group VIDEO_SAMPLE_BUFFER
+
+%hook AVSampleBufferDisplayLayer
+
+- (void)layerDidBecomeVisible:(BOOL)visible
+{
+    %orig(visible || orientationOverride > 0);
+}
+
+%end
+
+%end
+
+// AVPlayerLayer draws through this one
+%group VIDEO_PLAYER
+
+%hook FigVideoLayer
+
+- (void)layerDidBecomeVisible:(BOOL)visible
+{
+    %orig(visible || orientationOverride > 0);
+}
+
+%end
+
+%end
+
 %ctor
 {
     BAIL_IF_UNSUPPORTED_IOS;
@@ -194,5 +232,14 @@ Called when a window intends to rotate to a new orientation. Used to force lands
     if ([bundlePath containsString:@".app"] && ![bundleIdentifier containsString:@"com.apple."])
     {
         %init(APPS);
+        // not every app loads AVFoundation
+        if (objc_getClass("AVSampleBufferDisplayLayer"))
+        {
+            %init(VIDEO_SAMPLE_BUFFER);
+        }
+        if (objc_getClass("FigVideoLayer"))
+        {
+            %init(VIDEO_PLAYER);
+        }
     }
 }

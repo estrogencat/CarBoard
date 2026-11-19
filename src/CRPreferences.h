@@ -18,6 +18,8 @@ typedef NS_ENUM(NSInteger, CRDockAlignment) {
 
 - (NSArray *)excludedApplications;
 - (CRDockAlignment)dockAlignment;
+// apps open in CarPlay's own app area (beside its sidebar) instead of a full-screen window with a dock
+- (BOOL)nativeCarplayLook;
 - (BOOL)fiveColumnIconLayout;
 
 @end

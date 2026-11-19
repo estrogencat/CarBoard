@@ -53,6 +53,31 @@ Invoked when the device is being locked while applications are running/active
 
 %end
 
+/*
+Host an app on the CarPlay screen, in CarPlay's app area (appFrame, display points; empty to guess it)
+*/
+static void CRLaunchAppOnCarplay(NSString *identifier, CGRect appFrame)
+{
+    @try
+    {
+        id sharedApp = [UIApplication sharedApplication];
+        CRCarPlayWindow *liveCarplayWindow = objcInvoke(sharedApp, @"liveCarplayWindow");
+        // tapping the app's icon again while it's up (e.g. in CarPlay's sidebar) shouldn't restart it
+        if (liveCarplayWindow && !liveCarplayWindow.isDismissing && [[liveCarplayWindow bundleIdentifier] isEqualToString:identifier])
+        {
+            return;
+        }
+        [liveCarplayWindow dismiss];
+
+        liveCarplayWindow = [[[CRCarPlayWindow alloc] initWithBundleIdentifier:identifier appFrame:appFrame] autorelease];
+        objc_setAssociatedObject(sharedApp, &kPropertyKey_liveCarplayWindow, liveCarplayWindow, OBJC_ASSOCIATION_RETAIN);
+    }
+    @catch (NSException *exception)
+    {
+        CRLog(@"carplay window launch failed: %@", exception);
+    }
+}
+
 %hook SpringBoard
 
 /*
@@ -62,30 +87,23 @@ When an app icon is tapped on the Carplay dashboard
 - (void)handleCarPlayLaunchNotification:(id)notification
 {
     LOG_LIFECYCLE_EVENT;
-    NSString *identifier = [notification userInfo][@"identifier"];
-    objcInvoke_1(self, @"launchAppOnCarplay:", identifier);
+    NSDictionary *userInfo = [notification userInfo];
+    NSString *identifier = userInfo[@"identifier"];
+    NSString *appFrameString = userInfo[@"appFrame"];
+    if (identifier)
+    {
+        CRLaunchAppOnCarplay(identifier, appFrameString ? CGRectFromString(appFrameString) : CGRectZero);
+    }
 }
 
+/*
+CarPlay's home button, or another app (or the dashboard) taking the screen
+*/
 %new
-- (void)launchAppOnCarplay:(NSString *)identifier
+- (void)handleCarPlayCloseNotification:(id)notification
 {
     LOG_LIFECYCLE_EVENT;
-    @try
-    {
-        // Dismiss any apps that are already being hosted on Carplay
-        id liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
-        if (liveCarplayWindow != nil)        {
-            objcInvoke(liveCarplayWindow, @"dismiss");
-        }
-
-        // Launch the requested app
-        liveCarplayWindow = [[[CRCarPlayWindow alloc] initWithBundleIdentifier:identifier] autorelease];
-        objc_setAssociatedObject(self, &kPropertyKey_liveCarplayWindow, liveCarplayWindow, OBJC_ASSOCIATION_RETAIN);
-    }
-    @catch (NSException *exception)
-    {
-        NSLog(@"carplay window launch failed! %@", exception);
-    }
+    [objcInvoke(self, @"liveCarplayWindow") dismiss];
 }
 
 /*
@@ -96,6 +114,9 @@ Invoked when SpringBoard finishes launching
     LOG_LIFECYCLE_EVENT;
     // Setup to receive App Launch notifications from the CarPlay process
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:self selector:NSSelectorFromString(@"handleCarPlayLaunchNotification:") name:@"com.carplayenable" object:nil];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:self selector:NSSelectorFromString(@"handleCarPlayCloseNotification:") name:@"com.carplayenable.close" object:nil];
+    // a respring takes down any app window, tell a CarPlay process that outlived us
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.closed" object:nil userInfo:nil];
 
     // Receive notifications for Carplay connect/disconnect events. When a Carplay screen becomes unavailable while an app is being hosted on it, that app window needs to be closed
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(carplayIsConnectedChanged) name:@"CarPlayIsConnectedDidChange" object:nil];
@@ -113,10 +134,16 @@ Invoked when SpringBoard finishes launching
         for (id appInfo in objcInvoke(appController, @"allInstalledApplications"))
         {
             NSString *identifier = objcInvoke(appInfo, @"bundleIdentifier");
-            // Skip stock apps
-            if (![objcInvoke(appInfo, @"bundleType") isEqualToString:@"User"] && [identifier containsString:@"com.apple."])
+            // Apple's own apps only when they have a home screen icon, the same rule CarPlay uses to show them
+            if ([identifier hasPrefix:@"com.apple."])
             {
-                continue;
+                id record = ((id (*)(id, SEL, id, BOOL, id *))objc_msgSend)([objc_getClass("LSApplicationRecord") alloc], NSSelectorFromString(@"initWithBundleIdentifier:allowPlaceholder:error:"), identifier, NO, NULL);
+                BOOL hasIcon = CRAppRecordHasHomeScreenIcon(record);
+                [record release];
+                if (!hasIcon)
+                {
+                    continue;
+                }
             }
             // Skip native-carplay apps
             if (getIvar(appInfo, @"_carPlayDeclaration") != nil)
@@ -360,6 +387,27 @@ The same goes for the phone's frame and orientation leaking in when the app is o
     }
 
     %orig;
+}
+
+%end
+
+%hook SBDeviceApplicationSceneHandle
+
+/*
+The app changed what it asks of its scene, which includes the orientations it supports (e.g. a video player that
+only does landscape)
+*/
+- (void)_didUpdateClientSettingsWithDiff:(id)diff transitionContext:(id)transitionContext
+{
+    %orig;
+    CRCarPlayWindow *liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
+    if (liveCarplayWindow && !liveCarplayWindow.isDismissing && objcInvoke(liveCarplayWindow.appViewController, @"sceneHandle") == self)
+    {
+        // not from inside the scene's own update
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [liveCarplayWindow followAppSupportedOrientations];
+        });
+    }
 }
 
 %end

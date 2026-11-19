@@ -95,6 +95,51 @@ static inline NSString *CRBundleIDForScene(id scene) {
     return [handle valueForKey:@"bundleIdentifier"];
 }
 
+/*
+Does this app have an icon on the phone's home screen, or is it one of the ~150 background services (view services,
+"angels", UI hosts) iOS also registers as apps? Decides which of Apple's own apps CarPlay shows.
+record: an LSApplicationRecord
+*/
+static inline BOOL CRAppRecordHasHomeScreenIcon(id record)
+{
+    if (!record)
+    {
+        return NO;
+    }
+    for (NSString *getterName in @[@"isLaunchProhibited", @"isLaunchDisabled", @"isPlaceholder", @"isWebApp", @"isWebAppPlaceholder"])
+    {
+        SEL getter = NSSelectorFromString(getterName);
+        if ([record respondsToSelector:getter] && ((BOOL (*)(id, SEL))objc_msgSend)(record, getter))
+        {
+            return NO;
+        }
+    }
+    if ([record respondsToSelector:NSSelectorFromString(@"appClipMetadata")] && ((id (*)(id, SEL))objc_msgSend)(record, NSSelectorFromString(@"appClipMetadata")))
+    {
+        return NO;
+    }
+
+    NSArray *tags = [record respondsToSelector:NSSelectorFromString(@"appTags")] ? ((id (*)(id, SEL))objc_msgSend)(record, NSSelectorFromString(@"appTags")) : nil;
+    NSDictionary *icons = [record respondsToSelector:NSSelectorFromString(@"iconDictionary")] ? ((id (*)(id, SEL))objc_msgSend)(record, NSSelectorFromString(@"iconDictionary")) : nil;
+    if ([tags containsObject:@"hidden"] || [icons count] == 0)
+    {
+        return NO;
+    }
+
+    // apps that stay off the home screen until they switch themselves on (Sidecar, PreviewShell)
+    id infoDictionary = [record respondsToSelector:NSSelectorFromString(@"infoDictionary")] ? ((id (*)(id, SEL))objc_msgSend)(record, NSSelectorFromString(@"infoDictionary")) : nil;
+    SEL objectForKeyOfClass = NSSelectorFromString(@"objectForKey:ofClass:");
+    if ([infoDictionary respondsToSelector:objectForKeyOfClass])
+    {
+        NSNumber *defaultVisible = ((id (*)(id, SEL, id, Class))objc_msgSend)(infoDictionary, objectForKeyOfClass, @"SBIconVisibilityDefaultVisible", [NSNumber class]);
+        if (defaultVisible && ![defaultVisible boolValue])
+        {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 #define assertGotExpectedObject(obj, type) if (!obj || ![obj isKindOfClass:NSClassFromString(type)]) [NSException raise:@"UnexpectedObjectException" format:@"Expected %@ but got %@", type, obj]
 
 #define kPropertyKey_liveCarplayWindow *NSSelectorFromString(@"liveCarplayWindow")
@@ -111,8 +156,11 @@ static char *kPropertyKey_didDrawPlaceholder;
 #define kPrefsAppLibraryChanged @"appLibrary"
 #define kPrefsDockAlignmentChanged @"dockAlignment"
 #define kPrefsIconLayoutChanged @"iconLayout"
+#define kPrefsNativeLookChanged @"nativeLook"
 
 #define CARPLAY_DOCK_WIDTH 40
+// CarPlay's own sidebar, for when its layout wasn't passed along
+#define CARPLAY_SIDEBAR_WIDTH 45
 
 /*
 Scale the CarPlay window draws the (phone-sized) keyboard at: as wide as the app container, but never covering more than

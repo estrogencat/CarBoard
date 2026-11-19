@@ -66,6 +66,16 @@
     return CRDockAlignmentAuto;
 }
 
+- (BOOL)nativeCarplayLook
+{
+    if (_cachedPreferences && [_cachedPreferences valueForKey:@"nativeCarplayLook"])
+    {
+        return [[_cachedPreferences valueForKey:@"nativeCarplayLook"] boolValue];
+    }
+
+    return YES;
+}
+
 - (BOOL)fiveColumnIconLayout
 {
     if (_cachedPreferences && [_cachedPreferences valueForKey:@"fiveColumnIconLayout"])

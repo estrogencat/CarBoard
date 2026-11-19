@@ -42,7 +42,7 @@
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
-    return 3;
+    return 4;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
@@ -52,8 +52,10 @@
         case 0:
             return 1;
         case 1:
-            return 3;
+            return 1;
         case 2:
+            return 3;
+        case 3:
             return 1;
         default:
             break;
@@ -74,11 +76,23 @@
         if (indexPath.row == 0)
         {
             [[cell textLabel] setText:@"Add/Remove Apps"];
+            // cells are reused across sections, drop any switch left on this one
+            [cell setAccessoryView:nil];
             [cell setAccessoryType:UITableViewCellAccessoryDisclosureIndicator];
         }
     }
     else if (indexPath.section == 1)
     {
+        [[cell textLabel] setText:@"Native CarPlay Look"];
+        UISwitch *cellSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+        [cellSwitch setOn:[[CRPreferences sharedInstance] nativeCarplayLook] animated:NO];
+        [cellSwitch addTarget:self action:@selector(nativeLookSwitchChanged:) forControlEvents:UIControlEventValueChanged];
+        [cell setAccessoryView:cellSwitch];
+        [cell setAccessoryType:UITableViewCellAccessoryNone];
+    }
+    else if (indexPath.section == 2)
+    {
+        [cell setAccessoryView:nil];
         if (indexPath.row == 0)
         {
             [[cell textLabel] setText:@"Left"];
@@ -102,7 +116,7 @@
             [cell setAccessoryType:UITableViewCellAccessoryNone];
         }
     }
-    else if (indexPath.section == 2)
+    else if (indexPath.section == 3)
     {
         if (indexPath.row == 0)
         {
@@ -111,6 +125,7 @@
             [cellSwitch setOn:[[CRPreferences sharedInstance] fiveColumnIconLayout] animated:NO];
             [cellSwitch addTarget:self action:@selector(iconLayoutSwitchChanged:) forControlEvents:UIControlEventValueChanged];
             [cell setAccessoryView:cellSwitch];
+            [cell setAccessoryType:UITableViewCellAccessoryNone];
         }
     }
     
@@ -124,8 +139,10 @@
         case 0:
             return @"CarPlay Dashboard";
         case 1:
-            return @"Dock Alignment";
+            return @"App Window";
         case 2:
+            return @"Dock Alignment";
+        case 3:
             return @"Carplay Icons";
         default:
             break;
@@ -135,6 +152,14 @@
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section
 {
+    if (section == 1)
+    {
+        return @"On: apps open next to CarPlay's own sidebar and close with its home button, like built-in CarPlay apps. Off: apps open full screen with their own dock (home, fullscreen and rotate buttons). Applies the next time an app opens.";
+    }
+    if (section == 2)
+    {
+        return @"Only used when Native CarPlay Look is off.";
+    }
     if (section == tableView.numberOfSections - 1)
     {
         return @"Created by Ethan Arbuckle";
@@ -157,7 +182,7 @@
             [[self navigationController] pushViewController:_appListController animated:YES];
             break;
         }
-        case 1:
+        case 2:
         {
             // Save the new setting
             [[CRPreferences sharedInstance] updateValue:@(indexPath.row) forPreferenceKey:@"dockAlignment"];
@@ -171,6 +196,12 @@
 
     [_rootTable reloadData];
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
+}
+
+- (void)nativeLookSwitchChanged:(UISwitch *)sender
+{
+    [[CRPreferences sharedInstance] updateValue:@(sender.isOn) forPreferenceKey:@"nativeCarplayLook"];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotification:[NSNotification notificationWithName:PREFERENCES_CHANGED_NOTIFICATION object:kPrefsNativeLookChanged]];
 }
 
 - (void)iconLayoutSwitchChanged:(UISwitch *)sender

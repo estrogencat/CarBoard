@@ -21,7 +21,17 @@ id getCarplayCADisplay(void);
 @property (nonatomic) BOOL shouldGenerateSnapshot;
 @property (nonatomic) BOOL drawOnMainScreen;
 
-- (id)initWithBundleIdentifier:(NSString *)identifier;
+// read from preferences when the window is made: sit in CarPlay's own app area (no dock) instead of a full-screen
+// window with its own dock
+@property (nonatomic, readonly) BOOL nativeLook;
+@property (nonatomic, readonly) BOOL isDismissing;
+
+// appFrame: CarPlay's app area beside its sidebar, in display points (empty to guess it). Only used for the native look
+- (id)initWithBundleIdentifier:(NSString *)identifier appFrame:(CGRect)appFrame;
+- (NSString *)bundleIdentifier;
+- (void)dismiss;
+// call when the app may have changed which orientations it supports
+- (void)followAppSupportedOrientations;
 
 // frame for the hosted scene, in the phone display's portrait coordinate space
 - (CGRect)sceneFrame;
