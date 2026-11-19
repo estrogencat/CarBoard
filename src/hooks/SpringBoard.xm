@@ -442,12 +442,25 @@ static void CRRegisterSceneView(id sceneView)
     [liveSceneViews addObject:sceneView];
 }
 
+// SBSceneView asserts ("already been invalidated") if touched after -invalidate
+static BOOL CRSceneViewIsInvalidated(id sceneView)
+{
+    Ivar invalidatedIvar = class_getInstanceVariable([sceneView class], "_invalidated");
+    if (!invalidatedIvar)
+    {
+        return NO;
+    }
+    return *(BOOL *)((uint8_t *)(__bridge void *)sceneView + ivar_getOffset(invalidatedIvar));
+}
+
 NSArray *CRSceneViewsForSceneHandle(id sceneHandle, UIWindow *excludingWindow)
 {
     NSMutableArray *matches = [NSMutableArray array];
     for (UIView *sceneView in [liveSceneViews allObjects])
     {
-        if ([sceneView window] == excludingWindow || ![objcInvoke(sceneView, @"sceneHandle") isEqual:sceneHandle])
+        // views torn down with the CarPlay window lose their window first, so skip windowless and invalidated ones too
+        UIWindow *window = [sceneView window];
+        if (!window || window == excludingWindow || CRSceneViewIsInvalidated(sceneView) || ![objcInvoke(sceneView, @"sceneHandle") isEqual:sceneHandle])
         {
             continue;
         }
