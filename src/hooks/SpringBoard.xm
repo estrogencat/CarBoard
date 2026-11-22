@@ -1,5 +1,7 @@
 #include "../common.h"
 #include "../CRCarplayWindow.h"
+#include "../CRSpringBoardMode.h"
+#include "../CRCarAppSwitcher.h"
 
 
 /*
@@ -56,21 +58,71 @@ Invoked when the device is being locked while applications are running/active
 /*
 Host an app on the CarPlay screen, in CarPlay's app area (appFrame, display points; empty to guess it)
 */
-static void CRLaunchAppOnCarplay(NSString *identifier, CGRect appFrame)
+static UIEdgeInsets CRKeyboardDevicePadding(UIInterfaceOrientation orientation);
+
+// apps running as iPad apps (iPad layout setting), bundle id -> pid
+static NSMutableDictionary<NSString *, NSNumber *> *padLayoutPids;
+
+/*
+Leaves the iPad layout marker for the app and restarts it if it's running in the other layout. YES if it was
+stopped, to launch once it's gone
+*/
+static BOOL CRPrepareLayoutForCarplay(NSString *identifier)
+{
+    [[CRPreferences sharedInstance] reloadPreferences];
+    // iPhone-only apps (Compass) have no iPad layout to switch to
+    id proxy = objcInvoke_1(objc_getClass("LSApplicationProxy"), @"applicationProxyForIdentifier:", identifier);
+    NSArray *families = [proxy respondsToSelector:NSSelectorFromString(@"deviceFamily")] ? objcInvoke(proxy, @"deviceFamily") : nil;
+    BOOL padLayout = [[CRPreferences sharedInstance] iPadAppLayout] && [families containsObject:@2];
+    CRSetPadLayoutMarker(identifier, padLayout);
+
+    id application = objcInvoke_1(objcInvoke(objc_getClass("SBApplicationController"), @"sharedInstance"), @"applicationWithBundleIdentifier:", identifier);
+    id processState = [application respondsToSelector:NSSelectorFromString(@"processState")] ? objcInvoke(application, @"processState") : nil;
+    int pid = [processState respondsToSelector:NSSelectorFromString(@"pid")] ? ((int (*)(id, SEL))objc_msgSend)(processState, NSSelectorFromString(@"pid")) : 0;
+    BOOL running = [processState respondsToSelector:NSSelectorFromString(@"isRunning")] && ((BOOL (*)(id, SEL))objc_msgSend)(processState, NSSelectorFromString(@"isRunning"));
+    BOOL runningAsPad = pid > 0 && [padLayoutPids[identifier] intValue] == pid;
+    if (!running || pid <= 0 || padLayout == runningAsPad)
+    {
+        return NO;
+    }
+    CRLog(@"%@ is running as an %@ app, restarting it", identifier, runningAsPad ? @"iPad" : @"iPhone");
+    kill(pid, SIGKILL);
+    return YES;
+}
+
+static void CRLaunchAppOnCarplay(NSString *identifier, CGRect appFrame, NSSet *actions)
 {
     @try
     {
         id sharedApp = [UIApplication sharedApplication];
         CRCarPlayWindow *liveCarplayWindow = objcInvoke(sharedApp, @"liveCarplayWindow");
+        [[CRCarAppSwitcher sharedInstance] hideAnimated:YES];
+        [[CRCarAppSwitcher sharedInstance] noteAppOpened:identifier appFrame:appFrame];
+        if ([identifier isEqualToString:kCRSpringBoardBundleID])
+        {
+            [liveCarplayWindow dismiss];
+            [[CRSpringBoardMode sharedInstance] enterWithAppFrame:appFrame];
+            return;
+        }
         // tapping the app's icon again while it's up (e.g. in CarPlay's sidebar) shouldn't restart it
         if (liveCarplayWindow && !liveCarplayWindow.isDismissing && [[liveCarplayWindow bundleIdentifier] isEqualToString:identifier])
         {
+            [liveCarplayWindow deliverActions:actions];
             return;
         }
         [liveCarplayWindow dismiss];
 
-        liveCarplayWindow = [[[CRCarPlayWindow alloc] initWithBundleIdentifier:identifier appFrame:appFrame] autorelease];
-        objc_setAssociatedObject(sharedApp, &kPropertyKey_liveCarplayWindow, liveCarplayWindow, OBJC_ASSOCIATION_RETAIN);
+        void (^openWindow)(void) = ^{
+            CRCarPlayWindow *window = [[[CRCarPlayWindow alloc] initWithBundleIdentifier:identifier appFrame:appFrame launchActions:actions] autorelease];
+            objc_setAssociatedObject(sharedApp, &kPropertyKey_liveCarplayWindow, window, OBJC_ASSOCIATION_RETAIN);
+        };
+        if (CRPrepareLayoutForCarplay(identifier))
+        {
+            // give FrontBoard time to see the old process go
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), openWindow);
+            return;
+        }
+        openWindow();
     }
     @catch (NSException *exception)
     {
@@ -92,7 +144,7 @@ When an app icon is tapped on the Carplay dashboard
     NSString *appFrameString = userInfo[@"appFrame"];
     if (identifier)
     {
-        CRLaunchAppOnCarplay(identifier, appFrameString ? CGRectFromString(appFrameString) : CGRectZero);
+        CRLaunchAppOnCarplay(identifier, appFrameString ? CGRectFromString(appFrameString) : CGRectZero, nil);
     }
 }
 
@@ -120,6 +172,59 @@ Invoked when SpringBoard finishes launching
 
     // Receive notifications for Carplay connect/disconnect events. When a Carplay screen becomes unavailable while an app is being hosted on it, that app window needs to be closed
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(carplayIsConnectedChanged) name:@"CarPlayIsConnectedDidChange" object:nil];
+
+    [CRSpringBoardMode sharedInstance].launchHandler = ^(NSString *bundleIdentifier, CGRect appFrame, NSSet *actions) {
+        CRLaunchAppOnCarplay(bundleIdentifier, appFrame, actions);
+    };
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:kCRSpringBoardModeShowNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        BOOL showing = [note.userInfo[@"showing"] boolValue];
+        if (!showing)
+        {
+            [[CRCarAppSwitcher sharedInstance] hideAnimated:NO];
+        }
+        [[CRSpringBoardMode sharedInstance] setShowing:showing];
+    }];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:kCRSpringBoardModeRestoreNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        CRSpringBoardMode *springBoardMode = [CRSpringBoardMode sharedInstance];
+        if (springBoardMode.active || ![springBoardMode wasLeftOn])
+        {
+            return;
+        }
+        NSString *appFrame = note.userInfo[@"appFrame"];
+        CRLog(@"sbmode: restoring after CarPlay restart");
+        CRLaunchAppOnCarplay(kCRSpringBoardBundleID, appFrame ? CGRectFromString(appFrame) : CGRectZero, nil);
+    }];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:kCRSpringBoardModeExitNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        [[CRCarAppSwitcher sharedInstance] hideAnimated:NO];
+        [[CRSpringBoardMode sharedInstance] exit];
+    }];
+    padLayoutPids = [[NSMutableDictionary alloc] init];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:kCRCarIconInfoNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        [[CRSpringBoardMode sharedInstance] noteCarIconName:note.userInfo[@"name"] imageData:note.userInfo[@"image"]];
+    }];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:kCRPadLayoutLaunchedNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        if ([note.object isKindOfClass:[NSString class]] && note.userInfo[@"pid"])
+        {
+            padLayoutPids[note.object] = note.userInfo[@"pid"];
+            CRLog(@"%@ started as an iPad app", note.object);
+        }
+    }];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:PREFERENCES_CHANGED_NOTIFICATION object:kPrefsHomeScreenScaleChanged queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        [[CRSpringBoardMode sharedInstance] rebuild];
+    }];
+    // CarPlay's home button: pressed twice, the car app switcher; once, away from it
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:kCRAppSwitcherShowNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        [[CRCarAppSwitcher sharedInstance] show];
+    }];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:kCRHomePressedNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        BOOL switcherWasUp = [[CRCarAppSwitcher sharedInstance] isShowing];
+        [[CRCarAppSwitcher sharedInstance] hideAnimated:YES];
+        BOOL sheetWasUp = [[CRSpringBoardMode sharedInstance] closeAddSheet];
+        if (!switcherWasUp && !sheetWasUp && ![note.userInfo[@"appShowing"] boolValue])
+        {
+            [[CRSpringBoardMode sharedInstance] homeButtonPressed];
+        }
+    }];
 
     NSMutableArray *appIdentifiersToIgnoreLockAssertions = [[NSMutableArray alloc] init];
     objc_setAssociatedObject(self, &kPropertyKey_lockAssertionIdentifiers, appIdentifiersToIgnoreLockAssertions, OBJC_ASSOCIATION_RETAIN);
@@ -182,6 +287,12 @@ A Carplay connected/disconnected event
 - (void)carplayIsConnectedChanged
 {
     LOG_LIFECYCLE_EVENT;
+    if (!getCarplayCADisplay())
+    {
+        dispatch_async(dispatch_get_main_queue(), ^(void) {
+            [[CRSpringBoardMode sharedInstance] exit];
+        });
+    }
     // If a window is being hosted, and the carplay radio disconnected, close the window
     id liveCarplayWindow = objcInvoke(self, @"liveCarplayWindow");
     if (liveCarplayWindow && !getCarplayCADisplay())
@@ -278,9 +389,48 @@ FBScene's _joinUpdate:block:completion: calls these blocks with the mutable sett
 passed through untouched for blocks that take more, but it isn't always an object (activation passes something else),
 so only the first argument is ever inspected.
 */
+// Spotlight's one scene, while the car's search shows it
+static BOOL CRSceneIsCarSearch(id scene)
+{
+    return [objcInvoke(scene, @"identifier") isEqual:@"searchScreen"] && [[CRSpringBoardMode sharedInstance] isSearchShowing];
+}
+
+/*
+The car is landscape, so its Spotlight is too (its keyboard follows the scene). The frame is in the phone display's
+portrait space: a tall frame makes the landscape scene wide.
+*/
+static void CRForceCarSearchSceneSettings(id settings)
+{
+    if ([settings respondsToSelector:NSSelectorFromString(@"setInterfaceOrientation:")])
+    {
+        ((void (*)(id, SEL, long long))objc_msgSend)(settings, NSSelectorFromString(@"setInterfaceOrientation:"), UIInterfaceOrientationLandscapeRight);
+    }
+    if ([settings respondsToSelector:NSSelectorFromString(@"setFrame:")])
+    {
+        CGRect frame = ((CGRect (*)(id, SEL))objc_msgSend)(settings, NSSelectorFromString(@"frame"));
+        if (frame.size.width > frame.size.height)
+        {
+            ((void (*)(id, SEL, CGRect))objc_msgSend)(settings, NSSelectorFromString(@"setFrame:"), CGRectMake(frame.origin.x, frame.origin.y, frame.size.height, frame.size.width));
+        }
+    }
+}
+
 static id CRWrapSceneUpdateBlock(id scene, id block)
 {
-    if (!block || !CRSceneIsHostedOnCarplay(scene))
+    if (!block)
+    {
+        return block;
+    }
+    if (CRSceneIsCarSearch(scene))
+    {
+        void *(^originalBlock)(id, void *) = block;
+        return [[^void *(id settings, void *passthrough) {
+            void *result = originalBlock(settings, passthrough);
+            CRForceCarSearchSceneSettings(settings);
+            return result;
+        } copy] autorelease];
+    }
+    if (!CRSceneIsHostedOnCarplay(scene))
     {
         return block;
     }
@@ -337,6 +487,14 @@ Use this to prevent the App from going to sleep when other applications are laun
             settings = [[settings mutableCopy] autorelease];
         }
         CRForceCarplaySceneSettings(settings);
+    }
+    else if (CRSceneIsCarSearch(self))
+    {
+        if ([settings respondsToSelector:NSSelectorFromString(@"mutableCopy")] && ![settings respondsToSelector:NSSelectorFromString(@"setFrame:")])
+        {
+            settings = [[settings mutableCopy] autorelease];
+        }
+        CRForceCarSearchSceneSettings(settings);
     }
 
     %orig(settings, arg2, arg3);
@@ -446,6 +604,7 @@ without covering more than about half of it.
 static NSHashTable *carplayKeyboardWindows;
 // height of the keyboard, in its own orientation, from the last keyboard arbiter update
 static CGFloat lastKeyboardHeight;
+static const NSInteger kCarSearchKeyboardBackgroundTag = 0x4b424447;
 static char kCarplayKeyboardContainerKey;
 // where the presentation view lived in the phone's keyboard window
 static char kCarplayKeyboardHomeKey;
@@ -465,6 +624,19 @@ static CGFloat CRAngleForInterfaceOrientation(UIInterfaceOrientation orientation
     }
 }
 
+// the keyboard's padding on this phone (the bottom one holds the globe and dictation keys)
+static UIEdgeInsets CRKeyboardDevicePadding(UIInterfaceOrientation orientation)
+{
+    Class keyboardImpl = objc_getClass("UIKeyboardImpl");
+    SEL paddingSel = NSSelectorFromString(@"deviceSpecificPaddingForInterfaceOrientation:inputMode:");
+    if (![keyboardImpl respondsToSelector:paddingSel])
+    {
+        return UIEdgeInsetsZero;
+    }
+    id inputMode = objcInvoke(objcInvoke(objc_getClass("UIKeyboardInputModeController"), @"sharedInputModeController"), @"currentInputMode");
+    return ((UIEdgeInsets (*)(id, SEL, long long, id))objc_msgSend)(keyboardImpl, paddingSel, (long long)orientation, inputMode);
+}
+
 // returns NO if there's no CarPlay window (or nothing to host) and the keyboard should stay on the phone
 static BOOL CRLayoutCarplayKeyboard(UIWindow *keyboardWindow)
 {
@@ -472,6 +644,14 @@ static BOOL CRLayoutCarplayKeyboard(UIWindow *keyboardWindow)
     UIView *keyboardContainer = objc_getAssociatedObject(keyboardWindow, &kCarplayKeyboardContainerKey);
     UIWindow *carplayRootWindow = liveCarplayWindow.rootWindow;
     UIView *appContainerView = liveCarplayWindow.appContainerView;
+    // no CarPlay app: the car home screen's Spotlight, across the whole car window
+    CRSpringBoardMode *springBoardMode = [CRSpringBoardMode sharedInstance];
+    BOOL carSearch = !liveCarplayWindow && [springBoardMode isSearchShowing];
+    if (carSearch)
+    {
+        carplayRootWindow = springBoardMode.window;
+        appContainerView = springBoardMode.window.rootViewController.view;
+    }
     id presenter = getIvar(keyboardWindow, @"_remoteHostedKeyboardScenePresenter");
     UIView *presentationView = [presenter respondsToSelector:NSSelectorFromString(@"presentationView")] ? objcInvoke(presenter, @"presentationView") : nil;
     if (!carplayRootWindow || !appContainerView || !presentationView)
@@ -517,7 +697,15 @@ static BOOL CRLayoutCarplayKeyboard(UIWindow *keyboardWindow)
         [keyboardContainer addSubview:presentationView];
     }
 
-    UIInterfaceOrientation orientation = liveCarplayWindow.orientation;
+    // the car's Spotlight scene is landscape
+    UIInterfaceOrientation orientation = carSearch ? UIInterfaceOrientationLandscapeRight : liveCarplayWindow.orientation;
+    CGRect target = [appContainerView.superview convertRect:appContainerView.frame toView:carplayRootWindow];
+    // a portrait app in the wide app area gets a landscape keyboard (the app turns it; Apple's apps don't load the hooks)
+    NSString *keyboardAppIdentifier = [liveCarplayWindow bundleIdentifier];
+    if (!carSearch && orientation == UIInterfaceOrientationPortrait && target.size.width > target.size.height && ![keyboardAppIdentifier hasPrefix:@"com.apple."])
+    {
+        orientation = UIInterfaceOrientationLandscapeLeft;
+    }
     BOOL landscape = UIInterfaceOrientationIsLandscape(orientation);
     CGSize sceneSize = keyboardWindow.bounds.size;
     CGSize uprightSize = landscape ? CGSizeMake(MAX(sceneSize.width, sceneSize.height), MIN(sceneSize.width, sceneSize.height)) : CGSizeMake(MIN(sceneSize.width, sceneSize.height), MAX(sceneSize.width, sceneSize.height));
@@ -528,13 +716,34 @@ static BOOL CRLayoutCarplayKeyboard(UIWindow *keyboardWindow)
         keyboardHeight = uprightSize.height * (landscape ? 0.5 : 0.38);
     }
 
-    CGRect target = [appContainerView.superview convertRect:appContainerView.frame toView:carplayRootWindow];
+    // the phone's portrait keyboard reports its height without the strip under it (globe and dictation keys)
+    if ((!landscape || carSearch) && lastKeyboardHeight > 0)
+    {
+        CGFloat bottomPadding = CRKeyboardDevicePadding(orientation).bottom;
+        if (keyboardHeight + bottomPadding < uprightSize.height)
+        {
+            keyboardHeight += bottomPadding;
+        }
+    }
     CGFloat scale = CRCarplayKeyboardScale(target.size, uprightSize, keyboardHeight);
     CGFloat drawnHeight = keyboardHeight * scale;
 
     keyboardContainer.hidden = NO;
     keyboardContainer.frame = CGRectMake(target.origin.x, CGRectGetMaxY(target) - drawnHeight, target.size.width, drawnHeight);
     [carplayRootWindow bringSubviewToFront:keyboardContainer];
+
+    // Spotlight draws the keyboard's background itself where it thinks the keyboard is, so give the car's one its own
+    UIView *keyboardBackground = [keyboardContainer viewWithTag:kCarSearchKeyboardBackgroundTag];
+    if (carSearch && !keyboardBackground)
+    {
+        keyboardBackground = [[[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]] autorelease];
+        keyboardBackground.tag = kCarSearchKeyboardBackgroundTag;
+        keyboardBackground.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [keyboardContainer insertSubview:keyboardBackground atIndex:0];
+        CRSeparateMaterialGroups(keyboardBackground);
+    }
+    keyboardBackground.frame = keyboardContainer.bounds;
+    keyboardBackground.hidden = !carSearch;
 
     // bottom-aligned and centered: the keyboard sits along the bottom edge of the (upright) scene
     presentationView.transform = CGAffineTransformIdentity;
@@ -547,28 +756,80 @@ static BOOL CRLayoutCarplayKeyboard(UIWindow *keyboardWindow)
 
     // the app reports this height to itself in its keyboard notifications, so it moves content above the keyboard.
     // it ignores repeats, and a relaunched app starts without one, so just send it every time
-    NSString *bundleIdentifier = objcInvoke(liveCarplayWindow.application, @"bundleIdentifier");
+    NSString *bundleIdentifier = carSearch ? nil : objcInvoke(liveCarplayWindow.application, @"bundleIdentifier");
     if (bundleIdentifier)
     {
-        [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.keyboard" object:bundleIdentifier userInfo:@{@"height": @(drawnHeight)}];
+        [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.keyboard" object:bundleIdentifier userInfo:@{@"height": @(drawnHeight / (liveCarplayWindow.appScale > 0 ? liveCarplayWindow.appScale : 1.0))}];
     }
     return YES;
 }
 
+static BOOL CRKeyboardBelongsOnCar(void)
+{
+    return objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow") || [[CRSpringBoardMode sharedInstance] isSearchShowing];
+}
+
 void CRRelayoutCarplayKeyboards(void)
 {
+    // the car search needs a keyboard window that may never have been on the car
+    Class keyboardWindowClass = objc_getClass("SBMedusaHostedKeyboardWindow");
+    for (UIWindow *window in [[UIApplication sharedApplication] windows])
+    {
+        if (keyboardWindowClass && [window isKindOfClass:keyboardWindowClass] && ![carplayKeyboardWindows containsObject:window])
+        {
+            if (CRLayoutCarplayKeyboard(window))
+            {
+                window.hidden = NO;
+            }
+        }
+    }
     for (UIWindow *keyboardWindow in [carplayKeyboardWindows allObjects])
     {
         CRLayoutCarplayKeyboard(keyboardWindow);
     }
 }
 
+%hook SBSpotlightMultiplexingViewController
+
+// the car is landscape, so its Spotlight (and keyboard) can be too
++ (unsigned long long)spotlightSupportedInterfaceOrientations
+{
+    unsigned long long orientations = %orig;
+    if ([[CRSpringBoardMode sharedInstance] isSearchShowing])
+    {
+        orientations |= (1 << UIInterfaceOrientationLandscapeLeft) | (1 << UIInterfaceOrientationLandscapeRight);
+    }
+    return orientations;
+}
+
+%end
+
+// Spotlight is one scene: landscape while it's on the car (its keyboard follows), portrait again for the phone
+%hook SPUIRemoteSearchViewController
+
+- (void)updateSceneSettingsWithBlock:(void (^)(id))block
+{
+    %orig(^(id settings) {
+        if (block)
+        {
+            block(settings);
+        }
+        // the FBScene hooks turn it landscape for the car; portrait again for the phone
+        if (![[CRSpringBoardMode sharedInstance] isSearchShowing] && [settings respondsToSelector:NSSelectorFromString(@"setInterfaceOrientation:")])
+        {
+            ((void (*)(id, SEL, long long))objc_msgSend)(settings, NSSelectorFromString(@"setInterfaceOrientation:"), UIInterfaceOrientationPortrait);
+        }
+    });
+}
+
+%end
+
 %hook SBMedusaHostedKeyboardWindow
 
 - (void)setHidden:(BOOL)hidden
 {
     // SpringBoard hides it since the CarPlay app isn't in the phone's layout, so keep it up while hosting
-    if (objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow"))
+    if (CRKeyboardBelongsOnCar())
     {
         %orig(NO);
         CRLayoutCarplayKeyboard((UIWindow *)self);
@@ -859,6 +1120,620 @@ The relevant modes for this tweak are LiveContent (interactive app) and Placehol
     }
 
     return bounds;
+}
+
+%end
+
+// the car home screen's landscape grid gives labels more room than SpringBoard sized its image pools for,
+// and an image bigger than a pool slot asserts. drop the pool for those (4 bytes a pixel is the worst case)
+static id CRPoolForImage(id pool, CGSize size, CGFloat scale)
+{
+    if (!pool)
+    {
+        return nil;
+    }
+    size_t width = (size_t)ceil(size.width * scale), height = (size_t)ceil(size.height * scale);
+    size_t needed = ((width * 4 + 63) & ~(size_t)63) * height;
+    return needed > objcInvokeT(pool, @"slotLength", size_t) ? nil : pool;
+}
+
+// where the car home screen's page dots go (centre y in the folder view), just above the dock
+static CGFloat carPageDotsCenterY = NAN;
+// compared by identity only, never messaged
+static void *carPageDotsView;
+
+static BOOL CRIsCarPageDotsView(UIView *view)
+{
+    UIWindow *carWindow = [[CRSpringBoardMode sharedInstance] window];
+    return carWindow && (void *)view == carPageDotsView && view.window == carWindow && !isnan(carPageDotsCenterY);
+}
+
+%hook SBFolderView
+
+- (void)layoutSubviews
+{
+    %orig;
+    UIWindow *carWindow = [[CRSpringBoardMode sharedInstance] window];
+    if (!carWindow || ((UIView *)self).window != carWindow || ![self respondsToSelector:NSSelectorFromString(@"dockView")])
+    {
+        return;
+    }
+    // the dots are centred in a taller accessory view, move that
+    UIView *pageControl = objcInvoke(self, @"pageControl");
+    UIView *accessoryView = [pageControl isKindOfClass:[UIView class]] ? pageControl.superview : nil;
+    UIView *dockView = objcInvoke(self, @"dockView");
+    if (!accessoryView.superview || ![dockView isKindOfClass:[UIView class]] || !dockView.superview)
+    {
+        return;
+    }
+    carPageDotsView = (void *)accessoryView;
+    carPageDotsCenterY = [dockView.superview convertPoint:dockView.frame.origin toView:accessoryView.superview].y - 14;
+    accessoryView.center = CGPointMake(accessoryView.center.x, carPageDotsCenterY);
+}
+
+%end
+
+// SpringBoard puts the dots back while scrolling, keep them where the car home screen wants them
+%hook SBFolderScrollAccessoryView
+
+- (void)setCenter:(CGPoint)center
+{
+    if (CRIsCarPageDotsView((UIView *)self))
+    {
+        center.y = carPageDotsCenterY;
+    }
+    %orig(center);
+}
+
+- (void)setFrame:(CGRect)frame
+{
+    if (CRIsCarPageDotsView((UIView *)self))
+    {
+        frame.origin.y = carPageDotsCenterY - frame.size.height / 2;
+    }
+    %orig(frame);
+}
+
+%end
+
+// the car home screen's pages hold as many icons as its grid shows, not the phone's 24
+static BOOL CRCarRootGridSize(id model, Class folderClass, CRIconGridSize *size)
+{
+    NSUInteger columns = 0, rows = 0;
+    Class rootFolderClass = objc_getClass("SBRootFolder");
+    if (!rootFolderClass || ![folderClass isSubclassOfClass:rootFolderClass] || ![[CRSpringBoardMode sharedInstance] rootGridColumns:&columns rows:&rows forIconModel:model])
+    {
+        return NO;
+    }
+    size->columns = (unsigned short)columns;
+    size->rows = (unsigned short)rows;
+    return YES;
+}
+
+/*
+The car home screen's App Library: ours (CarPlay's icon, the car's) first in Utilities
+*/
+%hook SBHLibraryViewController
+
+// apps only: not the category pods or their small grids
+- (BOOL)iconViewDisplaysCloseBox:(id)iconView
+{
+    if (![[CRSpringBoardMode sharedInstance] isCarLibrary:self])
+    {
+        return %orig;
+    }
+    id icon = [iconView respondsToSelector:NSSelectorFromString(@"icon")] ? objcInvoke(iconView, @"icon") : nil;
+    SEL isLeaf = NSSelectorFromString(@"isLeafIcon");
+    SEL isWidget = NSSelectorFromString(@"isWidgetIcon");
+    BOOL app = [icon respondsToSelector:isLeaf] && ((BOOL (*)(id, SEL))objc_msgSend)(icon, isLeaf) && !([icon respondsToSelector:isWidget] && ((BOOL (*)(id, SEL))objc_msgSend)(icon, isWidget));
+    if (!app)
+    {
+        return NO;
+    }
+    return %orig;
+}
+
+- (void)_installCategoryMap:(id)map
+{
+    NSArray *ours = [[CRSpringBoardMode sharedInstance] libraryIconIdentifiers];
+    if (!map || !ours.count || ![[CRSpringBoardMode sharedInstance] isCarLibrary:self])
+    {
+        %orig;
+        return;
+    }
+    @try
+    {
+        NSDictionary *byCategory = objcInvoke(map, @"sortedApplicationIdentifiersByCategoryIdentifier");
+        id utilities = nil;
+        for (id category in byCategory)
+        {
+            // Suggestions has Settings too
+            NSString *name = [category respondsToSelector:NSSelectorFromString(@"localizedDisplayName")] ? objcInvoke(category, @"localizedDisplayName") : nil;
+            if ([name isEqualToString:@"Utilities"])
+            {
+                utilities = category;
+                break;
+            }
+        }
+        id patched = [[map mutableCopy] autorelease];
+        if (utilities && [patched respondsToSelector:NSSelectorFromString(@"setSortedApplicationIdentifiersByCategoryIdentifier:")])
+        {
+            NSMutableDictionary *patchedByCategory = [[byCategory mutableCopy] autorelease];
+            NSMutableArray *identifiers = [[ours mutableCopy] autorelease];
+            for (NSString *identifier in byCategory[utilities])
+            {
+                if (![identifiers containsObject:identifier])
+                {
+                    [identifiers addObject:identifier];
+                }
+            }
+            patchedByCategory[utilities] = identifiers;
+            objcInvoke_1(patched, @"setSortedApplicationIdentifiersByCategoryIdentifier:", patchedByCategory);
+            map = patched;
+        }
+        CRLog(@"sbmode: library map %@, utilities %@", map == patched ? @"patched" : @"left alone", utilities);
+    }
+    @catch (NSException *exception)
+    {
+        CRLog(@"sbmode: library map patch failed: %@", exception);
+    }
+    %orig(map);
+}
+
+%end
+
+/*
+The App Library's blur covers the whole screen as it fades in, over the last home page too. On the car's wide screen
+that's most of a page: keep it to the library's page, sliding in with it, at full strength
+*/
+static void CRPinLibraryBackdrop(UIView *folderView)
+{
+    id manager = objcInvoke([CRSpringBoardMode sharedInstance], @"iconManager");
+    if (!manager || objcInvoke(objcInvoke(manager, @"rootFolderController"), @"folderView") != folderView)
+    {
+        return;
+    }
+    UIView *backdrop = objcInvoke(folderView, @"trailingCustomBackdropView");
+    UIScrollView *scrollView = objcInvoke(folderView, @"scrollView");
+    if (!backdrop || backdrop.hidden || ![scrollView isKindOfClass:[UIScrollView class]])
+    {
+        return;
+    }
+    CGFloat pageOffset = ((CGFloat (*)(id, SEL))objc_msgSend)(folderView, NSSelectorFromString(@"trailingCustomViewPageScrollOffset"));
+    CGRect bounds = folderView.bounds;
+    CGFloat left = MIN(MAX(0, pageOffset - scrollView.contentOffset.x), bounds.size.width);
+    backdrop.frame = CGRectMake(left, 0, bounds.size.width - left, bounds.size.height);
+    if ([backdrop respondsToSelector:NSSelectorFromString(@"setTransitionProgress:")])
+    {
+        ((void (*)(id, SEL, double))objc_msgSend)(backdrop, NSSelectorFromString(@"setTransitionProgress:"), 1.0);
+    }
+}
+
+/*
+The car's landscape pages would use the rotated grid, which drops free placement's gaps (and repacks the icons). The
+car's grid is its own (see CRCarRootGridSize), so they lay out upright like the phone's
+*/
+// grid cell info option bits: 2 rotated layout, 4 gaps allowed
+static const unsigned long long kCRGridCellInfoRotated = 2;
+
+static BOOL CRIsCarListView(UIView *listView)
+{
+    id model = [listView respondsToSelector:NSSelectorFromString(@"model")] ? objcInvoke(listView, @"model") : nil;
+    id folder = [model respondsToSelector:NSSelectorFromString(@"folder")] ? objcInvoke(model, @"folder") : nil;
+    return [[CRSpringBoardMode sharedInstance] isCarRootFolder:folder];
+}
+
+static BOOL CRIsOnCarWindow(UIView *view)
+{
+    UIWindow *carWindow = [CRSpringBoardMode sharedInstance].window;
+    return carWindow && view.window == carWindow;
+}
+
+%hook SBIconDragManager
+
+- (BOOL)iconViewCanBeginDrags:(UIView *)iconView
+{
+    return CRIsOnCarWindow(iconView) ? NO : %orig;
+}
+
+%end
+
+// buttons' menus (edit mode's Edit button) open in the window, at full size: open them in the scaled home screen
+%hook UIButton
+
+- (id)_contextMenuInteraction:(id)interaction styleForMenuWithConfiguration:(id)configuration
+{
+    id style = %orig;
+    UIView *scaledView = objcInvoke([CRSpringBoardMode sharedInstance], @"scaledView");
+    if (scaledView && [(UIView *)self isDescendantOfView:scaledView] && [style respondsToSelector:NSSelectorFromString(@"setContainerView:")])
+    {
+        objcInvoke_1(style, @"setContainerView:", scaledView);
+    }
+    return style;
+}
+
+%end
+
+// the App Library's icons don't ask the drag manager
+%hook SBIconView
+
+- (BOOL)canBeginDrags
+{
+    return CRIsOnCarWindow((UIView *)self) ? NO : %orig;
+}
+
+- (NSArray *)dragInteraction:(id)interaction itemsForBeginningSession:(id)session
+{
+    return CRIsOnCarWindow((UIView *)self) ? @[] : %orig;
+}
+
+%end
+
+%hook SBIconListView
+
+- (unsigned long long)gridCellInfoOptions
+{
+    // gaps yes, rotated no
+    return CRIsCarListView((UIView *)self) ? (%orig & ~kCRGridCellInfoRotated) : %orig;
+}
+
+// laid out upright like the phone's pages (the car's grid is set up the same both ways)
+- (id)initWithModel:(id)model layoutProvider:(id)layoutProvider iconLocation:(id)location orientation:(long long)orientation iconViewProvider:(id)iconViewProvider
+{
+    id folder = [model respondsToSelector:NSSelectorFromString(@"folder")] ? objcInvoke(model, @"folder") : nil;
+    BOOL car = [[CRSpringBoardMode sharedInstance] isCarRootFolder:folder];
+    return %orig(model, layoutProvider, location, car ? UIInterfaceOrientationPortrait : orientation, iconViewProvider);
+}
+
+- (void)setOrientation:(long long)orientation
+{
+    %orig(CRIsCarListView((UIView *)self) ? UIInterfaceOrientationPortrait : orientation);
+}
+
+%end
+
+%hook SBRootFolderView
+
+- (void)layoutSubviews
+{
+    %orig;
+    CRPinLibraryBackdrop((UIView *)self);
+}
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView
+{
+    %orig;
+    CRPinLibraryBackdrop((UIView *)self);
+}
+
+%end
+
+// the car home screen's dock fits as many icons as its width allows
+%hook SBHIconModel
+
+- (CRIconGridSize)listGridSizeForFolderClass:(Class)folderClass
+{
+    CRIconGridSize size;
+    return CRCarRootGridSize(self, folderClass, &size) ? size : %orig;
+}
+
+- (CRIconGridSize)listWithNonDefaultSizedIconsGridSizeForFolderClass:(Class)folderClass
+{
+    CRIconGridSize size;
+    return CRCarRootGridSize(self, folderClass, &size) ? size : %orig;
+}
+
+- (unsigned long long)maxIconCountForDock
+{
+    NSUInteger count = [[CRSpringBoardMode sharedInstance] dockIconCountForIconModelOrManager:self];
+    return count ?: %orig;
+}
+
+%end
+
+%hook SBHIconManager
+
+// the car's widgets open their app on the car screen, with the widget's action
+- (unsigned long long)gridCellInfoOptions
+{
+    return [[CRSpringBoardMode sharedInstance] isCarIconManager:self] ? (%orig & ~kCRGridCellInfoRotated) : %orig;
+}
+
+- (unsigned long long)gridCellInfoOptionsForOrientation:(long long)orientation
+{
+    return [[CRSpringBoardMode sharedInstance] isCarIconManager:self] ? (%orig & ~kCRGridCellInfoRotated) : %orig;
+}
+
+- (void)widgetHostViewController:(id)controller requestsLaunch:(id)launch
+{
+    CRSpringBoardMode *mode = [CRSpringBoardMode sharedInstance];
+    if (![mode isCarIconManager:self])
+    {
+        %orig;
+        return;
+    }
+    [mode launchWidgetRequest:launch];
+}
+
+- (unsigned long long)maxIconCountForDock
+{
+    NSUInteger count = [[CRSpringBoardMode sharedInstance] dockIconCountForIconModelOrManager:self];
+    return count ?: %orig;
+}
+
+%end
+
+/*
+The phone's home screen hears every icon editor open and close (the notifications say nothing of whose), the car's too,
+and takes over the screen for each: a second one at once aborts SpringBoard. The car's isn't its business
+*/
+static BOOL carStyleEditorNotifying;
+
+%hook SBHIconManager
+
+- (void)setIconStylePickerVisible:(BOOL)visible
+{
+    BOOL isCar = [[CRSpringBoardMode sharedInstance] isCarIconManager:self];
+    carStyleEditorNotifying = isCar;
+    %orig;
+    carStyleEditorNotifying = NO;
+}
+
+%end
+
+%hook SBIconController
+
+- (void)informIconStyleObserversOfStyleChange
+{
+    %orig;
+    [[CRSpringBoardMode sharedInstance] updateIconStyle];
+}
+
+- (void)_styleEditorWillPresent:(NSNotification *)notification
+{
+    if (!carStyleEditorNotifying)
+    {
+        %orig;
+    }
+}
+
+- (void)_styleEditorDidDismiss:(NSNotification *)notification
+{
+    if (!carStyleEditorNotifying)
+    {
+        %orig;
+    }
+}
+
+%end
+
+// the car's frosted backgrounds get a capture group apart from the phone's (CRSeparateMaterialGroups)
+%hook MTMaterialView
+
+- (void)didMoveToWindow
+{
+    %orig;
+    UIWindow *carWindow = [[CRSpringBoardMode sharedInstance] window];
+    if (carWindow && ((UIView *)self).window == carWindow)
+    {
+        CRSeparateMaterialGroups((UIView *)self);
+    }
+}
+
+%end
+
+// in the car home screen's edit mode a hold on an icon drags it (CRSpringBoardMode) instead of opening its menu
+%hook SBIconView
+
+- (BOOL)allowsContextMenus
+{
+    CRSpringBoardMode *springBoardMode = [CRSpringBoardMode sharedInstance];
+    if (springBoardMode.window && ((UIView *)self).window == springBoardMode.window && [springBoardMode isEditing])
+    {
+        return NO;
+    }
+    return %orig;
+}
+
+%end
+
+/*
+App Library category bars style themselves with the modern bar appearance API, which UIKit refuses (throws) for
+CarPlay-idiom bars. On the car screen they keep the default look
+*/
+%hook SBHFeatherBlurNavigationBar
+
+- (void)_updateAppearance
+{
+    if (((UIView *)self).traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomCarPlay)
+    {
+        return;
+    }
+    // a bar made before it picked up the home screen's phone traits is still a CarPlay one
+    @try
+    {
+        %orig;
+    }
+    @catch (NSException *exception)
+    {
+        CRLog(@"library bar appearance: %@", exception.reason);
+    }
+}
+
+%end
+
+%hook UIImage
+
++ (id)sbf_imageFromContextWithSize:(CGSize)size scale:(CGFloat)scale type:(NSInteger)type pool:(id)pool drawing:(id)drawing
+{
+    return %orig(size, scale, type, CRPoolForImage(pool, size, scale), drawing);
+}
+
++ (id)sbf_imageFromContextWithSize:(CGSize)size scale:(CGFloat)scale type:(NSInteger)type pool:(id)pool drawing:(id)drawing encapsulation:(NSInteger)encapsulation
+{
+    return %orig(size, scale, type, CRPoolForImage(pool, size, scale), drawing, encapsulation);
+}
+
++ (id)sbf_imageFromBGRAContextWithSize:(CGSize)size scale:(CGFloat)scale colorSpace:(CGColorSpaceRef)colorSpace withAlpha:(BOOL)withAlpha pool:(id)pool drawing:(id)drawing encapsulation:(NSInteger)encapsulation
+{
+    return %orig(size, scale, colorSpace, withAlpha, CRPoolForImage(pool, size, scale), drawing, encapsulation);
+}
+
+%end
+
+/*
+System alerts (permission prompts are user notifications from tccd, locationd) go to the phone's screen. With the
+setting on and an app open on the car, they're shown over that app instead
+*/
+static NSMutableArray *carAlertItems;
+static char kCarAlertControllerKey;
+
+static UIWindow *carAlertWindow;
+
+// a window of its own over the app on the car, while alerts are up
+static UIViewController *CRCarAlertPresenter(void)
+{
+    CRCarPlayWindow *liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
+    UIWindow *appWindow = liveCarplayWindow.rootWindow;
+    if (!liveCarplayWindow || liveCarplayWindow.isDismissing || !appWindow || appWindow.hidden)
+    {
+        return nil;
+    }
+    if (!carAlertWindow || carAlertWindow.screen != appWindow.screen)
+    {
+        id displayConfiguration = objcInvoke(appWindow.screen, @"displayConfiguration");
+        if (!displayConfiguration)
+        {
+            return nil;
+        }
+        [carAlertWindow release];
+        carAlertWindow = objcInvoke_1([objc_getClass("UIRootSceneWindow") alloc], @"initWithDisplayConfiguration:", displayConfiguration);
+        UIViewController *rootViewController = [[[UIViewController alloc] init] autorelease];
+        rootViewController.view.backgroundColor = [UIColor clearColor];
+        carAlertWindow.rootViewController = rootViewController;
+    }
+    // laid out bigger and scaled down like the app, the car screen is short for an alert
+    CGFloat scale = liveCarplayWindow.appScale > 0 ? MIN(liveCarplayWindow.appScale, 1) : 1;
+    carAlertWindow.transform = CGAffineTransformIdentity;
+    carAlertWindow.frame = appWindow.frame;
+    carAlertWindow.bounds = CGRectMake(0, 0, appWindow.frame.size.width / scale, appWindow.frame.size.height / scale);
+    carAlertWindow.transform = CGAffineTransformMakeScale(scale, scale);
+    carAlertWindow.center = CGPointMake(CGRectGetMidX(appWindow.frame), CGRectGetMidY(appWindow.frame));
+    carAlertWindow.backgroundColor = [UIColor clearColor];
+    carAlertWindow.windowLevel = appWindow.windowLevel + 1;
+    carAlertWindow.hidden = NO;
+    UIViewController *presenter = carAlertWindow.rootViewController;
+    while (presenter.presentedViewController && !presenter.presentedViewController.isBeingDismissed)
+    {
+        presenter = presenter.presentedViewController;
+    }
+    return presenter;
+}
+
+static void CRHideCarAlertWindowIfDone(void)
+{
+    if (!carAlertItems.count)
+    {
+        carAlertWindow.hidden = YES;
+    }
+}
+
+// alerts cap their height by the screen's (the car's is short), the car's alert window is taller
+%hook _UIAlertControllerPhoneTVMacView
+
+- (void)updateConstraints
+{
+    %orig;
+    UIWindow *window = ((UIView *)self).window;
+    if (!carAlertWindow || window != carAlertWindow || ![self respondsToSelector:NSSelectorFromString(@"contentViewMaxHeightConstraint")])
+    {
+        return;
+    }
+    NSLayoutConstraint *maxHeight = objcInvoke(self, @"contentViewMaxHeightConstraint");
+    CGFloat extra = window.bounds.size.height - window.screen.bounds.size.height;
+    if (maxHeight && extra > 0 && maxHeight.constant + extra <= window.bounds.size.height)
+    {
+        maxHeight.constant += extra;
+    }
+}
+
+%end
+
+%hook SBAlertItemsController
+
+- (void)activateAlertItem:(id)item
+{
+    if (![item isKindOfClass:objc_getClass("SBUserNotificationAlert")] || [carAlertItems containsObject:item])
+    {
+        %orig;
+        return;
+    }
+    [[CRPreferences sharedInstance] reloadPreferences];
+    UIViewController *presenter = [[CRPreferences sharedInstance] alertsOnCar] ? CRCarAlertPresenter() : nil;
+    if (!presenter)
+    {
+        %orig;
+        return;
+    }
+    UIViewController *alertController = nil;
+    @try
+    {
+        objcInvoke(item, @"willActivate");
+        alertController = ((id (*)(id, SEL, BOOL, BOOL))objc_msgSend)(item, NSSelectorFromString(@"_prepareNewAlertControllerWithLockedState:requirePasscodeForActions:"), NO, NO);
+    }
+    @catch (NSException *exception)
+    {
+        CRLog(@"car alert: couldn't make %@: %@", item, exception);
+    }
+    if (![alertController isKindOfClass:[UIViewController class]])
+    {
+        CRHideCarAlertWindowIfDone();
+        %orig;
+        return;
+    }
+    CRLog(@"car alert: %@ on the car", item);
+    if (!carAlertItems)
+    {
+        carAlertItems = [[NSMutableArray alloc] init];
+    }
+    [carAlertItems addObject:item];
+    objc_setAssociatedObject(item, &kCarAlertControllerKey, alertController, OBJC_ASSOCIATION_RETAIN);
+    [presenter presentViewController:alertController animated:YES completion:^{
+        objcInvoke(item, @"didActivate");
+    }];
+}
+
+- (void)_deactivateAlertItem:(id)item reason:(int)reason animated:(BOOL)animated alertDismissCompletion:(void (^)(void))completion
+{
+    if (![carAlertItems containsObject:item])
+    {
+        %orig;
+        return;
+    }
+    CRLog(@"car alert: %@ done (%d)", item, reason);
+    [[item retain] autorelease];
+    [carAlertItems removeObject:item];
+    ((void (*)(id, SEL, int))objc_msgSend)(item, NSSelectorFromString(@"willDeactivateForReason:"), reason);
+    UIViewController *alertController = objc_getAssociatedObject(item, &kCarAlertControllerKey);
+    void (^finish)(void) = [^{
+        ((void (*)(id, SEL, int))objc_msgSend)(item, NSSelectorFromString(@"didDeactivateForReason:"), reason);
+        objc_setAssociatedObject(item, &kCarAlertControllerKey, nil, OBJC_ASSOCIATION_RETAIN);
+        CRHideCarAlertWindowIfDone();
+        if (completion)
+        {
+            completion();
+        }
+    } copy];
+    // a button tap dismisses it already
+    if (alertController.presentingViewController && !alertController.isBeingDismissed)
+    {
+        [alertController.presentingViewController dismissViewControllerAnimated:animated completion:finish];
+    }
+    else
+    {
+        finish();
+    }
+    [finish release];
 }
 
 %end

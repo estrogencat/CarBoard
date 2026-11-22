@@ -13,7 +13,8 @@
         NSArray *sortDescriptors = [NSArray arrayWithObject:nameDescriptor];
         _appList = [appList sortedArrayUsingDescriptors:sortDescriptors];
 
-        _rootTable = [[UITableView alloc] initWithFrame:CGRectMake(0, 0, [[UIScreen mainScreen] bounds].size.width, [[UIScreen mainScreen] bounds].size.height) style:UITableViewStyleGrouped];
+        _rootTable = [[UITableView alloc] initWithFrame:[[self view] bounds] style:UITableViewStyleGrouped];
+        [_rootTable setAutoresizingMask:UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight];
         [_rootTable setDelegate:self];
         [_rootTable setDataSource:self];
         [[self view] addSubview:_rootTable];

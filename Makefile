@@ -8,6 +8,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = carplayenable
 carplayenable_FILES = $(wildcard src/hooks/*.xm) $(wildcard src/*.mm)
 carplayenable_CFLAGS = -Wno-deprecated-declarations
+carplayenable_FRAMEWORKS = IOSurface
 
 
 include $(THEOS_MAKE_PATH)/tweak.mk

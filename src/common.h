@@ -157,10 +157,37 @@ static char *kPropertyKey_didDrawPlaceholder;
 #define kPrefsDockAlignmentChanged @"dockAlignment"
 #define kPrefsIconLayoutChanged @"iconLayout"
 #define kPrefsNativeLookChanged @"nativeLook"
+#define kPrefsHomeScreenScaleChanged @"homeScreenScale"
+#define kPrefsDockChanged @"dock"
 
 #define CARPLAY_DOCK_WIDTH 40
 // CarPlay's own sidebar, for when its layout wasn't passed along
 #define CARPLAY_SIDEBAR_WIDTH 45
+
+// SpringBoard mode: SpringBoard's icon on CarPlay's home screen swaps CarPlay's home screen for SpringBoard's
+#define kCRSpringBoardBundleID @"com.apple.springboard"
+#define kCRDashBoardBundleID @"com.apple.CarPlayApp"
+// SpringBoard -> CarPlay, userInfo active: whether SpringBoard's home screen stands in for CarPlay's
+#define kCRSpringBoardModeStateNotification @"com.carplayenable.sbmode.state"
+// CarPlay -> SpringBoard, userInfo showing: CarPlay went home (YES) or one of its own apps took the screen (NO)
+#define kCRSpringBoardModeShowNotification @"com.carplayenable.sbmode.show"
+// CarPlay -> SpringBoard: back to CarPlay's own home screen
+#define kCRSpringBoardModeExitNotification @"com.carplayenable.sbmode.exit"
+// SpringBoard -> CarPlay, userInfo identifier: open that app's own CarPlay UI
+#define kCRSpringBoardModeOpenNativeNotification @"com.carplayenable.sbmode.opennative"
+// CarPlay -> SpringBoard: its home button pressed twice in SpringBoard mode (the car app switcher), or once
+#define kCRAppSwitcherShowNotification @"com.carplayenable.sbmode.switcher.show"
+#define kCRHomePressedNotification @"com.carplayenable.sbmode.home"
+// CarPlay -> SpringBoard, userInfo appFrame: CarPlay (re)started; bring SpringBoard mode back if it was left on
+#define kCRSpringBoardModeRestoreNotification @"com.carplayenable.sbmode.restore"
+// iPad layout: marker SpringBoard leaves in the app's tmp folder; app -> SpringBoard (userInfo pid) when it started so
+// SpringBoard -> CarPlay: send the car's own icon; CarPlay -> SpringBoard (userInfo name, image): here it is
+#define kCRCarIconRequestNotification @"com.carplayenable.caricon.request"
+#define kCRCarIconInfoNotification @"com.carplayenable.caricon.info"
+// SpringBoard -> CarPlay: open the car's own screens (its icon was tapped)
+#define kCRCarIconLaunchNotification @"com.carplayenable.caricon.launch"
+#define kCRPadLayoutMarkerName @"com.carplayenable.padlayout"
+#define kCRPadLayoutLaunchedNotification @"com.carplayenable.padlayout.launched"
 
 /*
 Scale the CarPlay window draws the (phone-sized) keyboard at: as wide as the app container, but never covering more than

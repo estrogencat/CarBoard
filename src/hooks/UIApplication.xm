@@ -173,6 +173,119 @@ so tell the app again about the keyboard that is up
 %end
 
 /*
+A portrait app shown in CarPlay's wide app area still gets the phone's portrait keyboard. Turn just the keyboard's
+window landscape there; SpringBoard rotates it upright on the car like a landscape app's
+*/
+static long long CRKeyboardOrientation(long long orientation)
+{
+    if (orientationOverride != UIInterfaceOrientationPortrait)
+    {
+        return orientation;
+    }
+    UIWindow *keyWindow = objcInvoke([UIApplication sharedApplication], @"keyWindow");
+    CGSize size = keyWindow.bounds.size;
+    return size.width > size.height ? (long long)UIInterfaceOrientationLandscapeLeft : orientation;
+}
+
+static CGPoint *CRTouchPointIvar(UITouch *touch, const char *name)
+{
+    Ivar ivar = class_getInstanceVariable([UITouch class], name);
+    return ivar ? (CGPoint *)((uint8_t *)(__bridge void *)touch + ivar_getOffset(ivar)) : NULL;
+}
+
+%hook UIRemoteKeyboardWindow
+
+/*
+A new touch on a turned keyboard is stored clamped to the portrait screen's width, so its right half can't be tapped
+(moves aren't clamped). The hit test just before sees the real point: remember it, and put it back on the touch
+*/
+static CGPoint lastKeyboardHitPoint;
+static CFTimeInterval lastKeyboardHitTime;
+
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event
+{
+    if (CRKeyboardOrientation(UIInterfaceOrientationPortrait) != UIInterfaceOrientationPortrait && point.x > MIN(((UIWindow *)self).bounds.size.width, ((UIWindow *)self).bounds.size.height))
+    {
+        lastKeyboardHitPoint = point;
+        lastKeyboardHitTime = CACurrentMediaTime();
+    }
+    return %orig;
+}
+
+- (void)sendEvent:(UIEvent *)event
+{
+    UIWindow *window = (UIWindow *)self;
+    CGFloat clampEdge = MIN(window.bounds.size.width, window.bounds.size.height);
+    if (event.type == UIEventTypeTouches && CACurrentMediaTime() - lastKeyboardHitTime < 0.2)
+    {
+        for (UITouch *touch in [event allTouches])
+        {
+            CGPoint *location = CRTouchPointIvar(touch, "_locationInWindow");
+            if (touch.phase != UITouchPhaseBegan || !location || fabs(location->x - (clampEdge - 0.5)) > 0.6 || fabs(location->y - lastKeyboardHitPoint.y) > 2)
+            {
+                continue;
+            }
+            static const char *const names[] = {"_locationInWindow", "_previousLocationInWindow", "_preciseLocationInWindow", "_precisePreviousLocationInWindow"};
+            for (const char *name : names)
+            {
+                CGPoint *stored = CRTouchPointIvar(touch, name);
+                if (stored)
+                {
+                    *stored = lastKeyboardHitPoint;
+                }
+            }
+            lastKeyboardHitTime = 0;
+        }
+    }
+    %orig;
+}
+
+- (long long)interfaceOrientation
+{
+    return CRKeyboardOrientation(%orig);
+}
+
+- (void)updateForOrientation:(long long)orientation
+{
+    %orig(CRKeyboardOrientation(orientation));
+}
+
+- (void)updateForOrientation:(long long)orientation forceResetTransform:(BOOL)reset
+{
+    %orig(CRKeyboardOrientation(orientation), reset);
+}
+
+- (void)applicationWindow:(id)window didRotateWithOrientation:(long long)orientation duration:(double)duration
+{
+    %orig(window, CRKeyboardOrientation(orientation), duration);
+}
+
+- (void)_setRotatableClient:(id)client toOrientation:(long long)orientation updateStatusBar:(BOOL)updateStatusBar duration:(double)duration force:(BOOL)force isRotating:(BOOL)isRotating
+{
+    %orig(client, CRKeyboardOrientation(orientation), updateStatusBar, duration, force, isRotating);
+}
+
+%end
+
+
+
+
+
+%hook UIKeyboardSceneDelegate
+
++ (long long)interfaceOrientation
+{
+    return CRKeyboardOrientation(%orig);
+}
+
++ (void)setInterfaceOrientation:(long long)orientation
+{
+    %orig(CRKeyboardOrientation(orientation));
+}
+
+%end
+
+/*
 Called when a window intends to rotate to a new orientation. Used to force landscape/portrait
 */
 %hook UIWindow
@@ -222,6 +335,137 @@ the phone's display), and the video renderer stops drawing frames. Keep them vis
 
 %end
 
+/*
+iPad layout setting: SpringBoard leaves a marker in the app's tmp folder when it opens the app on the car. The app
+then starts as an iPad app (sidebars, split views). Its scenes get iPad traits, but not the keyboard's, which stays
+the phone keyboard the car layout is built for
+*/
+%group PAD
+
+// the app's own code asks from its bundle; the system's (the keyboard among it) from /System or /usr
+// Apple's apps keep most of their code in system frameworks (UIKit included): there only the keyboard counts as the system
+static BOOL isAppleApp;
+
+static BOOL CRCallerIsSystem(void *returnAddress)
+{
+    Dl_info info;
+    if (!dladdr(returnAddress, &info) || !info.dli_fname)
+    {
+        return YES;
+    }
+    const char *path = info.dli_fname;
+    if (strncmp(path, "/usr/", 5) == 0)
+    {
+        return YES;
+    }
+    if (strncmp(path, "/System/", 8) != 0)
+    {
+        return NO;
+    }
+    return !isAppleApp || strstr(path, "TextInput") || strstr(path, "Keyboard");
+}
+
+%hook UIDevice
+
+// iPad to the app, so it picks its iPad layout; the system keeps the phone's (its keyboard is the one the car shows)
+- (UIUserInterfaceIdiom)userInterfaceIdiom
+{
+    return CRCallerIsSystem(__builtin_return_address(0)) ? %orig : UIUserInterfaceIdiomPad;
+}
+
+- (NSString *)model
+{
+    return @"iPad";
+}
+
+- (NSString *)localizedModel
+{
+    return @"iPad";
+}
+
+%end
+
+// the iPad's orientations (UIKit and many apps answer with the iPhone's, often portrait-only)
+%hook UIApplication
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientationsForWindow:(UIWindow *)window
+{
+    NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
+    NSArray *names = info[@"UISupportedInterfaceOrientations~ipad"];
+    if (![names isKindOfClass:[NSArray class]] || !names.count)
+    {
+        // an iPad app that can share the screen turns every way there
+        NSArray *families = info[@"UIDeviceFamily"];
+        BOOL iPadApp = [families isKindOfClass:[NSArray class]] && [families containsObject:@2];
+        return iPadApp && ![info[@"UIRequiresFullScreen"] boolValue] ? UIInterfaceOrientationMaskAll : %orig;
+    }
+    NSDictionary *masks = @{
+        @"UIInterfaceOrientationPortrait": @(UIInterfaceOrientationMaskPortrait),
+        @"UIInterfaceOrientationPortraitUpsideDown": @(UIInterfaceOrientationMaskPortraitUpsideDown),
+        @"UIInterfaceOrientationLandscapeLeft": @(UIInterfaceOrientationMaskLandscapeLeft),
+        @"UIInterfaceOrientationLandscapeRight": @(UIInterfaceOrientationMaskLandscapeRight),
+    };
+    UIInterfaceOrientationMask mask = 0;
+    for (NSString *name in names)
+    {
+        mask |= [masks[name] unsignedIntegerValue];
+    }
+    return mask ?: %orig;
+}
+
+%end
+
+
+/*
+The car window is narrower than an iPad in landscape (992 vs 1133 points at 60%), so split views left to choose for
+themselves overlay their list and open on the detail alone. Side by side, once, as a wider iPad would
+*/
+static char kCRSplitViewTiledKey;
+
+%hook UISplitViewController
+
+- (void)viewWillAppear:(BOOL)animated
+{
+    %orig;
+    UISplitViewController *controller = (UISplitViewController *)self;
+    if (objc_getAssociatedObject(controller, &kCRSplitViewTiledKey) || controller.view.bounds.size.width < 700)
+    {
+        return;
+    }
+    objc_setAssociatedObject(controller, &kCRSplitViewTiledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (controller.preferredSplitBehavior == UISplitViewControllerSplitBehaviorAutomatic)
+    {
+        controller.preferredSplitBehavior = UISplitViewControllerSplitBehaviorTile;
+    }
+    if (controller.preferredDisplayMode == UISplitViewControllerDisplayModeAutomatic)
+    {
+        controller.preferredDisplayMode = UISplitViewControllerDisplayModeOneBesideSecondary;
+    }
+}
+
+%end
+
+%hook UIWindowScene
+
+- (id)initWithSession:(id)session connectionOptions:(id)connectionOptions
+{
+    id scene = %orig;
+    Class keyboardSceneClass = objc_getClass("_UIKeyboardWindowScene");
+    SEL traitOverridesSelector = NSSelectorFromString(@"traitOverrides");
+    if (scene && !(keyboardSceneClass && [scene isKindOfClass:keyboardSceneClass]) && [scene respondsToSelector:traitOverridesSelector])
+    {
+        id overrides = ((id (*)(id, SEL))objc_msgSend)(scene, traitOverridesSelector);
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(overrides, NSSelectorFromString(@"setUserInterfaceIdiom:"), UIUserInterfaceIdiomPad);
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(overrides, NSSelectorFromString(@"setHorizontalSizeClass:"), UIUserInterfaceSizeClassRegular);
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(overrides, NSSelectorFromString(@"setVerticalSizeClass:"), UIUserInterfaceSizeClassRegular);
+    }
+    return scene;
+}
+
+%end
+
+%end
+
 %ctor
 {
     BAIL_IF_UNSUPPORTED_IOS;
@@ -229,7 +473,21 @@ the phone's display), and the video renderer stops drawing frames. Keep them vis
     // Only need to inject into User Apps (+ jailbreak) apps
     NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
     NSString *bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
-    if ([bundlePath containsString:@".app"] && ![bundleIdentifier containsString:@"com.apple."])
+    if (![bundlePath containsString:@".app"] || [bundleIdentifier isEqualToString:kCRSpringBoardBundleID] || [bundleIdentifier isEqualToString:kCRDashBoardBundleID])
+    {
+        return;
+    }
+    // Apple's apps too (any with a data container, where SpringBoard leaves the marker)
+    NSString *padMarker = [NSTemporaryDirectory() stringByAppendingPathComponent:kCRPadLayoutMarkerName];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:padMarker])
+    {
+        isAppleApp = [bundleIdentifier hasPrefix:@"com.apple."];
+        %init(PAD);
+        // only for this launch: a respring on the car can't leave the phone with an iPad app
+        [[NSFileManager defaultManager] removeItemAtPath:padMarker error:nil];
+        [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:kCRPadLayoutLaunchedNotification object:bundleIdentifier userInfo:@{@"pid": @(getpid())}];
+    }
+    if (![bundleIdentifier containsString:@"com.apple."])
     {
         %init(APPS);
         // not every app loads AVFoundation

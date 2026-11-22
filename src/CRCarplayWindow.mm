@@ -1,5 +1,6 @@
 #include "common.h"
 #include "CRCarplayWindow.h"
+#include "CRCarAppSwitcher.h"
 
 /*
 Find the CADisplay handling the CarPlay stuff
@@ -69,7 +70,27 @@ void CRApplyCarplaySceneSettings(id settings, CRCarPlayWindow *window)
 @interface CRCarPlayWindow ()
 // the app's supported orientations when the window last followed them
 @property (nonatomic) unsigned long long lastSupportedOrientations;
+@property (nonatomic, copy) NSSet *launchActions;
 @end
+
+void CRSetPadLayoutMarker(NSString *bundleIdentifier, BOOL padLayout)
+{
+    id proxy = bundleIdentifier ? objcInvoke_1(objc_getClass("LSApplicationProxy"), @"applicationProxyForIdentifier:", bundleIdentifier) : nil;
+    NSURL *container = [proxy respondsToSelector:NSSelectorFromString(@"dataContainerURL")] ? objcInvoke(proxy, @"dataContainerURL") : nil;
+    if (!container)
+    {
+        return;
+    }
+    NSString *marker = [[container.path stringByAppendingPathComponent:@"tmp"] stringByAppendingPathComponent:kCRPadLayoutMarkerName];
+    if (padLayout)
+    {
+        [[NSFileManager defaultManager] createFileAtPath:marker contents:[NSData data] attributes:nil];
+    }
+    else
+    {
+        [[NSFileManager defaultManager] removeItemAtPath:marker error:nil];
+    }
+}
 
 @implementation CRCarPlayWindow
 
@@ -81,6 +102,8 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
 - (CGRect)sceneFrame
 {
     CGSize containerSize = self.appContainerView.bounds.size;
+    CGFloat scale = _appScale > 0 ? _appScale : 1.0;
+    containerSize = CGSizeMake(round(containerSize.width / scale), round(containerSize.height / scale));
     if (UIInterfaceOrientationIsLandscape(self.orientation))
     {
         return CGRectMake(0, 0, containerSize.height, containerSize.width);
@@ -93,14 +116,30 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
     return objcInvoke(self.application, @"bundleIdentifier");
 }
 
+- (void)deliverActions:(NSSet *)actions
+{
+    id appScene = objcInvoke(objcInvoke(self.appViewController, @"sceneHandle"), @"sceneIfExists");
+    if (actions.count && [appScene respondsToSelector:NSSelectorFromString(@"sendActions:")])
+    {
+        objcInvoke_1(appScene, @"sendActions:", actions);
+    }
+}
+
 - (id)initWithBundleIdentifier:(id)identifier appFrame:(CGRect)appFrame
+{
+    return [self initWithBundleIdentifier:identifier appFrame:appFrame launchActions:nil];
+}
+
+- (id)initWithBundleIdentifier:(id)identifier appFrame:(CGRect)appFrame launchActions:(NSSet *)launchActions
 {
     if ((self = [super init]))
     {
+        _launchActions = [launchActions copy];
         _observers = [[NSMutableArray alloc] init];
         // Update this processes' preference cache
         [[CRPreferences sharedInstance] reloadPreferences];
         _nativeLook = [[CRPreferences sharedInstance] nativeCarplayLook];
+        _appScale = [[CRPreferences sharedInstance] appScale];
 
         // Start in landscape
         self.orientation = UIInterfaceOrientationLandscapeLeft;
@@ -421,6 +460,10 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
     objcInvokeIf_1(self.appViewController, @"setAutomatesLifecycle:", NO);
     objcInvokeIf_1(self.appViewController, @"setRequestedMode:", (long long)2);
     objcInvoke(getIvar(self.appViewController, @"_activationSettings"), @"clearActivationSettings");
+    if (_launchActions.count)
+    {
+        objcInvoke_1(appSceneEntity, @"addActions:", _launchActions);
+    }
 
     id sceneUpdateTransaction = objcInvoke_2(self.appViewController, @"_createSceneUpdateTransactionForApplicationSceneEntity:deliveringActions:", appSceneEntity, 1);
     assertGotExpectedObject(sceneUpdateTransaction, @"SBApplicationSceneUpdateTransaction");
@@ -558,6 +601,7 @@ When a CarPlay App is closed: our home button, CarPlay's home button, another ap
         return;
     }
     _isDismissing = YES;
+    [[CRCarAppSwitcher sharedInstance] noteAppLeaving:[self bundleIdentifier] window:self.rootWindow];
 
     LOG_LIFECYCLE_EVENT;
     // Invalidate the scene monitor
@@ -590,6 +634,8 @@ When a CarPlay App is closed: our home button, CarPlay's home button, another ap
 
         if (!appStaysOnCarplay)
         {
+            // a relaunch on the phone is an iPhone app again
+            CRSetPadLayoutMarker(hostedBundleID, NO);
             // Notify the application process to stop enforcing an orientation lock
             int resetOrientationLock = -1;
             NSString *hostedIdentifier = getIvar(self.appViewController, @"_identifier");
@@ -809,6 +855,13 @@ Handle resizing the Carplay App window. Called anytime the app orientation chang
 
     UIView *appView = objcInvoke(self.appViewController, @"view");
     appView.transform = CGAffineTransformIdentity;
+    if (_appScale > 0 && _appScale != 1.0)
+    {
+        CGSize containerSize = self.appContainerView.bounds.size;
+        appView.bounds = CGRectMake(0, 0, round(containerSize.width / _appScale), round(containerSize.height / _appScale));
+        appView.center = CGPointMake(containerSize.width / 2.0, containerSize.height / 2.0);
+        appView.transform = CGAffineTransformMakeScale(_appScale, _appScale);
+    }
 
     self.dockView.alpha = fullscreen ? 0.0 : 1.0;
     CRRelayoutCarplayKeyboards();

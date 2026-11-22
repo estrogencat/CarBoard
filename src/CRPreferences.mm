@@ -86,4 +86,41 @@
     return YES;
 }
 
+static CGFloat CRClampedScale(id value)
+{
+    CGFloat scale = value ? [value doubleValue] : 1.0;
+    return (scale >= 0.5 && scale <= 1.5) ? scale : 1.0;
+}
+
+- (CGFloat)homeScreenScale
+{
+    return CRClampedScale([_cachedPreferences valueForKey:@"homeScreenScale"]);
+}
+
+- (CGFloat)appScale
+{
+    return CRClampedScale([_cachedPreferences valueForKey:@"appScale"]);
+}
+
+- (BOOL)fiveDockIcons
+{
+    id value = [_cachedPreferences valueForKey:@"fiveDockIcons"];
+    return value ? [value boolValue] : YES;
+}
+
+- (BOOL)pinSpringBoardInDock
+{
+    return [[_cachedPreferences valueForKey:@"pinSpringBoardInDock"] boolValue];
+}
+
+- (BOOL)alertsOnCar
+{
+    return [[_cachedPreferences valueForKey:@"alertsOnCar"] boolValue];
+}
+
+- (BOOL)iPadAppLayout
+{
+    return [[_cachedPreferences valueForKey:@"iPadAppLayout"] boolValue];
+}
+
 @end
