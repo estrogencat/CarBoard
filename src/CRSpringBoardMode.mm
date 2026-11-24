@@ -1128,6 +1128,15 @@ it over a page or the dock (hold it at a side edge to flip pages) and let go.
         return listViews;
     }
     id rootFolderController = objcInvoke(self.iconManager, @"rootFolderController");
+    if ([rootFolderController respondsToSelector:NSSelectorFromString(@"isOnLeadingCustomPage")] && ((BOOL (*)(id, SEL))objc_msgSend)(rootFolderController, NSSelectorFromString(@"isOnLeadingCustomPage")))
+    {
+        UIView *todayListView = [self.todayViewController respondsToSelector:NSSelectorFromString(@"listView")] ? objcInvoke(self.todayViewController, @"listView") : nil;
+        if (todayListView.window)
+        {
+            [listViews addObject:todayListView];
+        }
+        return listViews;
+    }
     UIView *dockListView = objcInvoke(rootFolderController, @"dockListView");
     UIView *pageListView = objcInvoke(rootFolderController, @"currentIconListView");
     if (dockListView.window)
@@ -1483,6 +1492,11 @@ it over a page or the dock (hold it at a side edge to flip pages) and let go.
     long long page = ((long long (*)(id, SEL))objc_msgSend)(rootFolderController, NSSelectorFromString(@"currentPageIndex")) + direction;
     long long firstPage = ((long long (*)(id, SEL))objc_msgSend)(rootFolderController, NSSelectorFromString(@"firstIconPageIndex"));
     long long lastPage = ((long long (*)(id, SEL))objc_msgSend)(rootFolderController, NSSelectorFromString(@"lastIconPageIndex"));
+    // widgets can go on to the Today page before the first page
+    if (page == firstPage - 1 && CRIconIsKind(_dragIcon, @"isWidgetIcon") && [rootFolderController respondsToSelector:NSSelectorFromString(@"leadingCustomViewPageIndex")])
+    {
+        firstPage = ((long long (*)(id, SEL))objc_msgSend)(rootFolderController, NSSelectorFromString(@"leadingCustomViewPageIndex"));
+    }
     if (page >= firstPage && page <= lastPage)
     {
         ((BOOL (*)(id, SEL, long long, BOOL))objc_msgSend)(rootFolderController, NSSelectorFromString(@"setCurrentPageIndex:animated:"), page, YES);
@@ -1507,6 +1521,14 @@ static id CRListContainingIcon(id rootFolder, id icon)
         if ([objcInvoke(list, @"icons") containsObject:icon])
         {
             return list;
+        }
+    }
+    for (NSString *todayListName in @[@"favoriteTodayList", @"todayList"])
+    {
+        id todayList = [rootFolder respondsToSelector:NSSelectorFromString(todayListName)] ? objcInvoke(rootFolder, todayListName) : nil;
+        if ([objcInvoke(todayList, @"icons") containsObject:icon])
+        {
+            return todayList;
         }
     }
     NSMutableArray *lists = [NSMutableArray arrayWithArray:objcInvoke(rootFolder, @"lists") ?: @[]];
@@ -1598,6 +1620,13 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     UIView *listView = [self dragListViewAtPoint:point];
     id list = objcInvoke(listView, @"model");
     if (!list)
+    {
+        return NO;
+    }
+    // only widgets go on the Today page
+    id rootFolder = objcInvoke(self.iconManager, @"rootFolder");
+    BOOL todayList = [rootFolder respondsToSelector:NSSelectorFromString(@"favoriteTodayList")] && list == objcInvoke(rootFolder, @"favoriteTodayList");
+    if (todayList && !CRIconIsKind(_dragIcon, @"isWidgetIcon"))
     {
         return NO;
     }
