@@ -137,10 +137,10 @@ static void CRLaunchAppOnCarplay(NSString *identifier, CGRect appFrame, NSSet *a
 - (void)applicationDidFinishLaunching:(id)arg1
 {
     LOG_LIFECYCLE_EVENT;
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:self selector:NSSelectorFromString(@"handleCarPlayLaunchNotification:") name:@"com.carplayenable" object:nil];
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:self selector:NSSelectorFromString(@"handleCarPlayCloseNotification:") name:@"com.carplayenable.close" object:nil];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:self selector:NSSelectorFromString(@"handleCarPlayLaunchNotification:") name:@"com.estrogencat.carboard" object:nil];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:self selector:NSSelectorFromString(@"handleCarPlayCloseNotification:") name:@"com.estrogencat.carboard.close" object:nil];
     // a respring closes any app window, tell CarPlay
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.closed" object:nil userInfo:nil];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.estrogencat.carboard.closed" object:nil userInfo:nil];
 
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(carplayIsConnectedChanged) name:@"CarPlayIsConnectedDidChange" object:nil];
 
@@ -721,7 +721,7 @@ static BOOL CRLayoutCarplayKeyboard(UIWindow *keyboardWindow)
     NSString *bundleIdentifier = carSearch ? nil : objcInvoke(liveCarplayWindow.application, @"bundleIdentifier");
     if (bundleIdentifier)
     {
-        [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.keyboard" object:bundleIdentifier userInfo:@{@"height": @(drawnHeight / (liveCarplayWindow.appScale > 0 ? liveCarplayWindow.appScale : 1.0))}];
+        [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.estrogencat.carboard.keyboard" object:bundleIdentifier userInfo:@{@"height": @(drawnHeight / (liveCarplayWindow.appScale > 0 ? liveCarplayWindow.appScale : 1.0))}];
     }
     return YES;
 }
@@ -1688,12 +1688,35 @@ int hook_BKSDisplayServicesSetScreenBlanked(int arg1)
 
 %end
 
+// settings and saved layouts from when this was CarPlayEnable
+static void CRImportOldFiles(void)
+{
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    NSDictionary *moves = @{
+        @"/var/mobile/Library/Preferences/com.carplayenable.preferences.plist": PREFERENCES_PLIST_PATH,
+        @"/var/mobile/Library/Caches/CarPlayEnableSwitcher": @"/var/mobile/Library/Caches/CarBoardSwitcher",
+    };
+    NSMutableDictionary *allMoves = [[moves mutableCopy] autorelease];
+    for (NSString *name in @[@"PlacedIcons", @"CarIcon", @"IconState", @"DesiredIconState", @"SpringBoardMode", @"RecentApps"])
+    {
+        allMoves[[NSString stringWithFormat:@"/var/mobile/Library/SpringBoard/CarPlayEnable%@.plist", name]] = [NSString stringWithFormat:@"/var/mobile/Library/SpringBoard/CarBoard%@.plist", name];
+    }
+    [allMoves enumerateKeysAndObjectsUsingBlock:^(NSString *oldPath, NSString *newPath, BOOL *stop) {
+        if ([fileManager fileExistsAtPath:oldPath] && ![fileManager fileExistsAtPath:newPath])
+        {
+            [fileManager moveItemAtPath:oldPath toPath:newPath error:nil];
+        }
+    }];
+}
+
 %ctor
 {
     BAIL_IF_UNSUPPORTED_IOS;
 
     if ([[[NSBundle mainBundle] bundleIdentifier] isEqualToString:@"com.apple.springboard"])
     {
+        CRImportOldFiles();
+        [[CRPreferences sharedInstance] reloadPreferences];
         %init(SPRINGBOARD);
         if (objc_getClass("_UIKeyboardArbiter"))
         {

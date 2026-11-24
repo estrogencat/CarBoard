@@ -78,8 +78,8 @@ static NSDictionary *CRCarplayKeyboardUserInfo(NSString *name, id object, NSDict
 {
     id _self = %orig;
     NSString *bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:_self selector:NSSelectorFromString(@"handleRotationRequest:") name:@"com.carplayenable.orientation" object:bundleIdentifier];
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:_self selector:NSSelectorFromString(@"handleCarplayKeyboardHeight:") name:@"com.carplayenable.keyboard" object:bundleIdentifier];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:_self selector:NSSelectorFromString(@"handleRotationRequest:") name:@"com.estrogencat.carboard.orientation" object:bundleIdentifier];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:_self selector:NSSelectorFromString(@"handleCarplayKeyboardHeight:") name:@"com.estrogencat.carboard.keyboard" object:bundleIdentifier];
     return _self;
 }
 

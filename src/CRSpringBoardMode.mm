@@ -33,9 +33,9 @@ void CRSeparateMaterialGroups(UIView *view)
     {
         // setting the new name frees the old one
         NSString *base = [[objcInvoke(view, @"groupNameBase") copy] autorelease];
-        if (base.length && ![base hasPrefix:@"CarPlayEnable."])
+        if (base.length && ![base hasPrefix:@"CarBoard."])
         {
-            objcInvoke_1(view, @"setGroupNameBase:", [@"CarPlayEnable." stringByAppendingString:base]);
+            objcInvoke_1(view, @"setGroupNameBase:", [@"CarBoard." stringByAppendingString:base]);
             CRLog(@"sbmode: material group %@ -> own", base);
         }
     }
@@ -57,12 +57,12 @@ static const CGFloat kCRHomeScreenBottomInset = 166;
 static const CGFloat kCRDockIconPitch = 95;
 static const CGFloat kCRDockSideInset = 30;
 
-static NSString *const kCRDashBoardIconIdentifier = @"com.carplayenable.dashboard";
-static NSString *const kCRCarIconIdentifier = @"com.carplayenable.car";
+static NSString *const kCRDashBoardIconIdentifier = @"com.estrogencat.carboard.dashboard";
+static NSString *const kCRCarIconIdentifier = @"com.estrogencat.carboard.car";
 // custom icons are placed once; one that's gone later was removed by the user
-static NSString *const kCRPlacedIconsPath = @"/var/mobile/Library/SpringBoard/CarPlayEnablePlacedIcons.plist";
-static NSString *const kCRCarIconInfoPath = @"/var/mobile/Library/SpringBoard/CarPlayEnableCarIcon.plist";
-static NSString *const kCROpenCarPlayUIShortcutType = @"com.carplayenable.opencarplayui";
+static NSString *const kCRPlacedIconsPath = @"/var/mobile/Library/SpringBoard/CarBoardPlacedIcons.plist";
+static NSString *const kCRCarIconInfoPath = @"/var/mobile/Library/SpringBoard/CarBoardCarIcon.plist";
+static NSString *const kCROpenCarPlayUIShortcutType = @"com.estrogencat.carboard.opencarplayui";
 
 struct CRIconImageInfo {
     CGSize size;
@@ -151,8 +151,8 @@ static const CGFloat kCRPhoneColumnPitch = 95.5;
 static const CGFloat kCRIconWidth = 60;
 static const CGFloat kCRHomeScreenMinSideInset = 30;
 
-static NSString *const kCRCarIconStatePath = @"/var/mobile/Library/SpringBoard/CarPlayEnableIconState.plist";
-static NSString *const kCRCarDesiredIconStatePath = @"/var/mobile/Library/SpringBoard/CarPlayEnableDesiredIconState.plist";
+static NSString *const kCRCarIconStatePath = @"/var/mobile/Library/SpringBoard/CarBoardIconState.plist";
+static NSString *const kCRCarDesiredIconStatePath = @"/var/mobile/Library/SpringBoard/CarBoardDesiredIconState.plist";
 
 static id CRCarIconStore(id phoneStore)
 {
@@ -228,7 +228,7 @@ static id CRCarplayDisplayConfiguration(void)
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:kCRSpringBoardModeStateNotification object:nil userInfo:@{@"active": @(_active)}];
 }
 
-static NSString *const kCRSpringBoardModeOnPath = @"/var/mobile/Library/SpringBoard/CarPlayEnableSpringBoardMode.plist";
+static NSString *const kCRSpringBoardModeOnPath = @"/var/mobile/Library/SpringBoard/CarBoardSpringBoardMode.plist";
 
 static void CRRememberSpringBoardMode(BOOL on)
 {
@@ -507,7 +507,7 @@ static void CRRememberSpringBoardMode(BOOL on)
             id presentable = [objcInvoke_1([objc_getClass("SBSpotlightPresentableViewController") alloc], @"initWithSpotlightMultiplexingViewController:", multiplexer) autorelease];
             objcInvoke_1(presentable, @"setDelegate:", iconController);
             id settings = objcInvoke(objcInvoke(iconController, @"searchPresenter"), @"pullToSearchSettings");
-            id presenter = [objcInvoke_2([objc_getClass("SBSearchPresenter") alloc], @"initWithSettings:identifier:", settings, @"CarPlayEnable") autorelease];
+            id presenter = [objcInvoke_2([objc_getClass("SBSearchPresenter") alloc], @"initWithSettings:identifier:", settings, @"CarBoard") autorelease];
             objcInvoke_1(presenter, @"setPresentables:", @[presentable]);
             objcInvoke_1(presenter, @"setSearchPresenterDelegate:", self);
             self.searchPresentable = presentable;

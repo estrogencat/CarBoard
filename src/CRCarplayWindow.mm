@@ -228,7 +228,7 @@ swapped to fill the window's width.
             objcInvoke(appSceneView, @"drawCarplayPlaceholder");
         }
 
-        [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.opened" object:nil userInfo:@{@"identifier": identifier}];
+        [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.estrogencat.carboard.opened" object:nil userInfo:@{@"identifier": identifier}];
 
         if (_nativeLook)
         {
@@ -464,7 +464,7 @@ swapped to fill the window's width.
                 }
             });
 
-            [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.orientation" object:appIdentifier userInfo:@{@"orientation": @(self.orientation)}];
+            [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.estrogencat.carboard.orientation" object:appIdentifier userInfo:@{@"orientation": @(self.orientation)}];
         });
     });
 
@@ -558,7 +558,7 @@ swapped to fill the window's width.
     }
 
     NSString *closedBundleID = [self bundleIdentifier];
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.closed" object:nil userInfo:closedBundleID ? @{@"identifier": closedBundleID} : nil];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.estrogencat.carboard.closed" object:nil userInfo:closedBundleID ? @{@"identifier": closedBundleID} : nil];
 
     void (^cleanupAfterCarplay)() = ^() {
         id sharedApp = [UIApplication sharedApplication];
@@ -572,7 +572,7 @@ swapped to fill the window's width.
             CRSetPadLayoutMarker(hostedBundleID, NO);
             int resetOrientationLock = -1;
             NSString *hostedIdentifier = getIvar(self.appViewController, @"_identifier");
-            [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.orientation" object:hostedIdentifier userInfo:@{@"orientation": @(resetOrientationLock)}];
+            [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.estrogencat.carboard.orientation" object:hostedIdentifier userInfo:@{@"orientation": @(resetOrientationLock)}];
         }
 
         [self.rootWindow setHidden:YES];
@@ -658,7 +658,7 @@ swapped to fill the window's width.
 
     NSString *sceneAppBundleID = CRBundleIDForScene(appScene) ?: objcInvoke(self.application, @"bundleIdentifier");
 
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.orientation" object:sceneAppBundleID userInfo:@{@"orientation": @(desiredOrientation)}];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.estrogencat.carboard.orientation" object:sceneAppBundleID userInfo:@{@"orientation": @(desiredOrientation)}];
     [self resizeAppViewForOrientation:desiredOrientation fullscreen:self.isFullscreen forceUpdate:NO];
 }
 

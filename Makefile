@@ -5,15 +5,15 @@ THEOS_PACKAGE_SCHEME = rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = carplayenable
-carplayenable_FILES = $(wildcard src/hooks/*.xm) $(wildcard src/*.mm)
-carplayenable_CFLAGS = -Wno-deprecated-declarations
-carplayenable_FRAMEWORKS = IOSurface
+TWEAK_NAME = carboard
+carboard_FILES = $(wildcard src/hooks/*.xm) $(wildcard src/*.mm)
+carboard_CFLAGS = -Wno-deprecated-declarations
+carboard_FRAMEWORKS = IOSurface
 
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-after-carplayenable-stage::
+after-carboard-stage::
 	mkdir -p $(THEOS_STAGING_DIR)/DEBIAN/
 	cp postinst_postrm $(THEOS_STAGING_DIR)/DEBIAN/postinst
 	cp postinst_postrm $(THEOS_STAGING_DIR)/DEBIAN/postrm
@@ -23,10 +23,6 @@ after-carplayenable-stage::
 after-install::
 	install.exec "killall -9 SpringBoard CarPlay Preferences"
 
-test::
-	install.exec "cycript -p SpringBoard" < tests/springboard_tests.cy
-	install.exec "cycript -p CarPlay" < tests/carplay_tests.cy
-
-SUBPROJECTS += carplayenableprefs
+SUBPROJECTS += carboardprefs
 
 include $(THEOS_MAKE_PATH)/aggregate.mk

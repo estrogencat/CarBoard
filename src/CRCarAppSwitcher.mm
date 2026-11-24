@@ -9,8 +9,8 @@ static const CGFloat kCRCardLabelHeight = 20;
 static const CGFloat kCRCardLabelGap = 6;
 static const CGFloat kCRCardSpacing = 18;
 static const CGFloat kCRGridMargin = 20;
-static NSString *const kCRRecentAppsPath = @"/var/mobile/Library/SpringBoard/CarPlayEnableRecentApps.plist";
-static NSString *const kCRSnapshotsDirectory = @"/var/mobile/Library/Caches/CarPlayEnableSwitcher";
+static NSString *const kCRRecentAppsPath = @"/var/mobile/Library/SpringBoard/CarBoardRecentApps.plist";
+static NSString *const kCRSnapshotsDirectory = @"/var/mobile/Library/Caches/CarBoardSwitcher";
 
 static NSString *CRSnapshotPath(NSString *bundleIdentifier)
 {
@@ -427,7 +427,7 @@ static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
     if ([systemService respondsToSelector:terminate])
     {
         // 1: the user asked
-        ((void (*)(id, SEL, id, long long, BOOL, id))objc_msgSend)(systemService, terminate, bundleIdentifier, 1, NO, @"CarPlayEnable app switcher");
+        ((void (*)(id, SEL, id, long long, BOOL, id))objc_msgSend)(systemService, terminate, bundleIdentifier, 1, NO, @"CarBoard app switcher");
     }
     CRLog(@"switcher: quit %@", bundleIdentifier);
 }

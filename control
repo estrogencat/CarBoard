@@ -1,10 +1,11 @@
-Package: com.cortex.carplayenable
-Name: CarPlayEnable
+Package: com.estrogencat.carboard
+Name: CarBoard
 Depends: firmware (>= 18.0), mobilesubstrate, preferenceloader
-Version: 1.1.0
+Conflicts: com.cortex.carplayenable
+Replaces: com.cortex.carplayenable
+Version: 1.0.0
 Architecture: iphoneos-arm64
-Description: Use any app with CarPlay (iOS 18 rootless)
-Maintainer: Cortex
-Author: Cortex
+Description: Use any app on CarPlay, or your iPhone's home screen (iOS 18 rootless)
+Maintainer: estrogencat
+Author: estrogencat
 Section: Tweaks
-Depiction: https://repo.ghostbin.co/depictions/carplayenable.html

@@ -43,7 +43,7 @@ jobs:
 
       - name: Check arm64e ABI
         run: |
-          for f in .theos/obj/carplayenable.dylib .theos/obj/carplayenableprefs.bundle/carplayenableprefs; do
+          for f in .theos/obj/carboard.dylib .theos/obj/carboardprefs.bundle/carboardprefs; do
             otool -hv -arch arm64e "$f" | grep -q USR00 || { echo "$f is not new-ABI arm64e"; exit 1; }
           done
 

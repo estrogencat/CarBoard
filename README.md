@@ -1,4 +1,4 @@
-# CarPlayEnable
+# CarBoard
 
 Use any app on your car's CarPlay screen, or swap CarPlay's home screen for your iPhone's own home screen.
 
@@ -37,7 +37,7 @@ Tap **SpringBoard** in CarPlay's sidebar to get your iPhone's home screen on the
 3. Your phone resprings. Connect to CarPlay and your apps are there.
 
 ## Settings
-Open the **Settings** app and find **CarPlayEnable**. You can:
+Open the **Settings** app and find **CarBoard**. You can:
 - add or remove apps from CarPlay
 - switch the native CarPlay look on or off
 - change the app size, iPad layout and permission prompts

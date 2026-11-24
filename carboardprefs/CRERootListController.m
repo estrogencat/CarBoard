@@ -7,7 +7,7 @@
 {
     if ((self = [super init]))
     {
-        [self setTitle:@"CarPlayEnable Preferences"];
+        [self setTitle:@"CarBoard"];
         _rootTable = [[UITableView alloc] initWithFrame:[[self view] bounds] style:UITableViewStyleGrouped];
         [_rootTable setAutoresizingMask:UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight];
         [_rootTable setDelegate:self];
@@ -67,10 +67,10 @@
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"com.carplay.rootcell"];
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"com.estrogencat.carboard.cell"];
     if (cell == nil)
     {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"com.carplay.rootcell"];
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"com.estrogencat.carboard.cell"];
     }
 
     if (indexPath.section == 0)
@@ -208,7 +208,7 @@
     }
     if (section == tableView.numberOfSections - 1)
     {
-        return @"Created by Ethan Arbuckle";
+        return @"By estrogencat, built on carplay-cast by Ethan Arbuckle";
     }
     return @"";
 }

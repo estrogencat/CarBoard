@@ -5,9 +5,9 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleExecutable</key>
-	<string>carplayenableprefs</string>
+	<string>carboardprefs</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.ethanarbuckle.carplayprefs</string>
+	<string>com.estrogencat.carboard.prefs</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundlePackageType</key>

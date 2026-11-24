@@ -32,24 +32,24 @@
         NSString *formattedMethod = [methodComponents componentsJoinedByString:@""]; \
         func = [NSString stringWithFormat:@"[%@ %@]", className, formattedMethod]; \
     } \
-    NSLog(@"[carplayenable] %@", func); \
+    NSLog(@"[carboard] %@", func); \
 }
 
 #define getIvar(object, ivar) [object valueForKey:ivar]
 #define setIvar(object, ivar, value) [object setValue:value forKey:ivar]
 
-#define CR_LOG_PATH "/var/mobile/Library/Logs/carplayenable.log"
+#define CR_LOG_PATH "/var/mobile/Library/Logs/carboard.log"
 __unused static void CRLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-    NSLog(@"[carplayenable] %@", message);
+    NSLog(@"[carboard] %@", message);
 
     static dispatch_queue_t logQueue;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        logQueue = dispatch_queue_create("carplayenable.log", DISPATCH_QUEUE_SERIAL);
+        logQueue = dispatch_queue_create("carboard.log", DISPATCH_QUEUE_SERIAL);
     });
     NSString *line = [NSString stringWithFormat:@"%@ [%@] %@\n", [NSDate date], [[NSProcessInfo processInfo] processName], message];
 #if !__has_feature(objc_arc)
@@ -140,9 +140,9 @@ static inline BOOL CRAppRecordHasHomeScreenIcon(id record)
 static char *kPropertyKey_didDrawPlaceholder;
 
 // the prefs pane runs as mobile and cannot write to /var/jb/Library/Preferences
-#define PREFERENCES_PLIST_PATH @"/var/mobile/Library/Preferences/com.carplayenable.preferences.plist"
-#define PREFERENCES_CHANGED_NOTIFICATION @"com.carplay.preferences.changed"
-#define PREFERENCES_APP_DATA_NOTIFICATION @"com.carplay.prefs.app_data"
+#define PREFERENCES_PLIST_PATH @"/var/mobile/Library/Preferences/com.estrogencat.carboard.plist"
+#define PREFERENCES_CHANGED_NOTIFICATION @"com.estrogencat.carboard.preferences.changed"
+#define PREFERENCES_APP_DATA_NOTIFICATION @"com.estrogencat.carboard.prefs.app_data"
 #define kPrefsAppDataRequesting @"Requesting"
 #define kPrefsAppDataReceiving @"Receiving"
 #define kPrefsAppLibraryChanged @"appLibrary"
@@ -157,18 +157,18 @@ static char *kPropertyKey_didDrawPlaceholder;
 
 #define kCRSpringBoardBundleID @"com.apple.springboard"
 #define kCRDashBoardBundleID @"com.apple.CarPlayApp"
-#define kCRSpringBoardModeStateNotification @"com.carplayenable.sbmode.state"
-#define kCRSpringBoardModeShowNotification @"com.carplayenable.sbmode.show"
-#define kCRSpringBoardModeExitNotification @"com.carplayenable.sbmode.exit"
-#define kCRSpringBoardModeOpenNativeNotification @"com.carplayenable.sbmode.opennative"
-#define kCRAppSwitcherShowNotification @"com.carplayenable.sbmode.switcher.show"
-#define kCRHomePressedNotification @"com.carplayenable.sbmode.home"
-#define kCRSpringBoardModeRestoreNotification @"com.carplayenable.sbmode.restore"
-#define kCRCarIconRequestNotification @"com.carplayenable.caricon.request"
-#define kCRCarIconInfoNotification @"com.carplayenable.caricon.info"
-#define kCRCarIconLaunchNotification @"com.carplayenable.caricon.launch"
-#define kCRPadLayoutMarkerName @"com.carplayenable.padlayout"
-#define kCRPadLayoutLaunchedNotification @"com.carplayenable.padlayout.launched"
+#define kCRSpringBoardModeStateNotification @"com.estrogencat.carboard.sbmode.state"
+#define kCRSpringBoardModeShowNotification @"com.estrogencat.carboard.sbmode.show"
+#define kCRSpringBoardModeExitNotification @"com.estrogencat.carboard.sbmode.exit"
+#define kCRSpringBoardModeOpenNativeNotification @"com.estrogencat.carboard.sbmode.opennative"
+#define kCRAppSwitcherShowNotification @"com.estrogencat.carboard.sbmode.switcher.show"
+#define kCRHomePressedNotification @"com.estrogencat.carboard.sbmode.home"
+#define kCRSpringBoardModeRestoreNotification @"com.estrogencat.carboard.sbmode.restore"
+#define kCRCarIconRequestNotification @"com.estrogencat.carboard.caricon.request"
+#define kCRCarIconInfoNotification @"com.estrogencat.carboard.caricon.info"
+#define kCRCarIconLaunchNotification @"com.estrogencat.carboard.caricon.launch"
+#define kCRPadLayoutMarkerName @"com.estrogencat.carboard.padlayout"
+#define kCRPadLayoutLaunchedNotification @"com.estrogencat.carboard.padlayout.launched"
 
 // the car keyboard's scale: the app container's width, at most about half its height
 static inline CGFloat CRCarplayKeyboardScale(CGSize containerSize, CGSize uprightScreenSize, CGFloat keyboardHeight)

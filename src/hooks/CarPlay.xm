@@ -8,7 +8,7 @@ struct SBIconImageInfo {
     double continuousCornerRadius;
 };
 
-static NSString *const kForcedAppTag = @"CarPlayEnable";
+static NSString *const kForcedAppTag = @"CarBoard";
 
 static NSMutableSet *appleAppsWithIcons;
 
@@ -131,7 +131,7 @@ static void recordAppLaunch(NSString *bundleID)
 static BOOL hostedAppShowing;
 static BOOL springBoardModeActive;
 // so our own home event isn't taken for the user's
-static NSString *const kOwnHomeEventContext = @"CarPlayEnable: close native app";
+static NSString *const kOwnHomeEventContext = @"CarBoard: close native app";
 
 static CGRect carplayAppFrame(void)
 {
@@ -155,7 +155,7 @@ static void requestCarplayLaunch(NSString *bundleID)
     {
         userInfo[@"appFrame"] = NSStringFromCGRect(appFrame);
     }
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable" object:nil userInfo:userInfo];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.estrogencat.carboard" object:nil userInfo:userInfo];
     recordAppLaunch(bundleID);
 }
 
@@ -177,7 +177,7 @@ static BOOL isMainDashboard(id dashboard)
     return !mainDashboard || mainDashboard == dashboard;
 }
 
-static NSString *const kTrimRequester = @"CarPlayEnable";
+static NSString *const kTrimRequester = @"CarBoard";
 
 // put CarPlay's own home screen to sleep while SpringBoard's covers it
 static void updateDashboardTrim(id dashboard)
@@ -267,7 +267,7 @@ static void requestCarplayClose(NSString *reason)
 {
     CRLog(@"closing the hosted app: %@", reason);
     hostedAppShowing = NO;
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.close" object:nil userInfo:nil];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.estrogencat.carboard.close" object:nil userInfo:nil];
 }
 
 %hook FBSApplicationLibrary
@@ -886,7 +886,7 @@ static void scheduleCarplayRestart(void)
     [restartTimer invalidate];
     [restartTimer release];
     restartTimer = [[NSTimer scheduledTimerWithTimeInterval:2.0 repeats:NO block:^(NSTimer *timer) {
-        NSLog(@"[carplayenable] restarting CarPlay to apply preference changes");
+        NSLog(@"[carboard] restarting CarPlay to apply preference changes");
         exit(0);
     }] retain];
 }
@@ -901,11 +901,11 @@ static void scheduleCarplayRestart(void)
     appleAppsWithIcons = [[NSMutableSet alloc] init];
     %init(CARPLAY);
 
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:@"com.carplayenable.opened" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:@"com.estrogencat.carboard.opened" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         hostedAppShowing = YES;
         updateDashboardTrim(objcInvoke([UIApplication sharedApplication], @"_currentDashboard"));
     }];
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:@"com.carplayenable.closed" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:@"com.estrogencat.carboard.closed" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         hostedAppShowing = NO;
         updateDashboardTrim(objcInvoke([UIApplication sharedApplication], @"_currentDashboard"));
     }];
@@ -932,7 +932,7 @@ static void scheduleCarplayRestart(void)
         objcInvoke_1(dashboard, @"handleEvent:", event);
     }];
     // a window from before a CarPlay restart would never close
-    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.close" object:nil userInfo:nil];
+    [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.estrogencat.carboard.close" object:nil userInfo:nil];
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:kCRSpringBoardModeExitNotification object:nil userInfo:nil];
     __block int restoreTries = 0;
     __block void (^restoreSpringBoardMode)(void) = [^{
