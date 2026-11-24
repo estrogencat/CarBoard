@@ -196,6 +196,18 @@ static CGPoint *CRTouchPointIvar(UITouch *touch, const char *name)
 %hook UIRemoteKeyboardWindow
 
 /*
+A touch on the app's own scene is tried on the keyboard first, in the app's coordinates. On the car the two scenes are
+scaled and placed apart, so that lands on keys that aren't there: only touches the window server gave the keyboard's
+scene count.
+*/
+- (id)_hitTest:(CGPoint)point withEvent:(id)event windowServerHitTestWindow:(UIWindow *)serverWindow
+{
+    UIWindow *window = (UIWindow *)self;
+    BOOL otherScene = serverWindow && serverWindow.windowScene && window.windowScene && serverWindow.windowScene != window.windowScene;
+    return otherScene ? nil : %orig;
+}
+
+/*
 A new touch on a turned keyboard is stored clamped to the portrait screen's width, so its right half can't be tapped
 (moves aren't clamped). The hit test just before sees the real point: remember it, and put it back on the touch
 */
