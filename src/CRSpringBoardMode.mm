@@ -1726,6 +1726,10 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     _dragIconView.alpha = 0;
 }
 
+// mutation options SpringBoard's own drag uses: while hovering (reflows only the icons around the spot), and on drop
+static const unsigned long long kCRHoverMutationOptions = 0x200340;
+static const unsigned long long kCRDropMutationOptions = 0x700;
+
 - (BOOL)moveDraggedIconToGridCell:(unsigned long long)cell ofListView:(UIView *)targetListView fromList:(id)sourceList
 {
     id targetList = objcInvoke(targetListView, @"model");
@@ -1749,13 +1753,12 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
             {
                 objcInvoke_1(sourceList, @"removeIcon:", _dragIcon);
             }
-            ((id (*)(id, SEL, id, unsigned long long, unsigned long long, unsigned long long))objc_msgSend)(targetList, NSSelectorFromString(@"insertIcon:atGridCellIndex:gridCellInfoOptions:mutationOptions:"), _dragIcon, cell, options, 0);
+            ((id (*)(id, SEL, id, unsigned long long, unsigned long long, unsigned long long))objc_msgSend)(targetList, NSSelectorFromString(@"insertIcon:atGridCellIndex:gridCellInfoOptions:mutationOptions:"), _dragIcon, cell, options, kCRHoverMutationOptions);
         }
-        if (!occupant || occupant == _dragIcon)
+        else
         {
-            ((void (*)(id, SEL, unsigned long long, id, unsigned long long))objc_msgSend)(targetList, NSSelectorFromString(@"setFixedLocation:forIcon:options:"), cell, _dragIcon, options);
+            ((id (*)(id, SEL, id, unsigned long long, unsigned long long, unsigned long long))objc_msgSend)(targetList, NSSelectorFromString(@"moveContainedIcon:toGridCellIndex:gridCellInfoOptions:mutationOptions:"), _dragIcon, cell, options, kCRHoverMutationOptions);
         }
-        ((id (*)(id, SEL, id, unsigned long long, unsigned long long, unsigned long long))objc_msgSend)(targetList, NSSelectorFromString(@"moveContainedIcon:toGridCellIndex:gridCellInfoOptions:mutationOptions:"), _dragIcon, cell, options, 0);
         moved = [objcInvoke(targetList, @"icons") containsObject:_dragIcon];
         CRLog(@"sbmode: to cell %llu (%@): now %llu", cell, occupant ? objcInvoke(occupant, @"displayName") : @"empty", ((unsigned long long (*)(id, SEL, id, unsigned long long))objc_msgSend)(targetList, cellOfIcon, _dragIcon, options));
     }
@@ -1900,6 +1903,29 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     return nil;
 }
 
+// what SpringBoard's drop does once the icon is in place
+- (void)commitDraggedIconInListView:(UIView *)listView
+{
+    id list = objcInvoke(listView, @"model");
+    if (!CRListUsesGridCells(list) || ![objcInvoke(list, @"icons") containsObject:_dragIcon])
+    {
+        return;
+    }
+    @try
+    {
+        unsigned long long options = CRGridOptions(listView);
+        unsigned long long cell = ((unsigned long long (*)(id, SEL, id, unsigned long long))objc_msgSend)(list, NSSelectorFromString(@"gridCellIndexForIcon:gridCellInfoOptions:"), _dragIcon, options);
+        if (cell != NSNotFound)
+        {
+            ((id (*)(id, SEL, id, unsigned long long, unsigned long long, unsigned long long))objc_msgSend)(list, NSSelectorFromString(@"moveContainedIcon:toGridCellIndex:gridCellInfoOptions:mutationOptions:"), _dragIcon, cell, options, kCRDropMutationOptions);
+        }
+    }
+    @catch (NSException *exception)
+    {
+        CRLog(@"sbmode: drop commit failed: %@", exception);
+    }
+}
+
 - (void)dropDraggedIconAtPoint:(CGPoint)point cancelled:(BOOL)cancelled
 {
     id icon = _dragIcon;
@@ -1917,6 +1943,7 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
         if ([self insertionAtPoint:point listView:&listView index:&index])
         {
             [self moveDraggedIconToListView:listView index:index];
+            [self commitDraggedIconInListView:listView];
         }
     }
     [self setFolderTargetView:nil];
@@ -2066,6 +2093,46 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
 - (BOOL)iconManagerWidgetsCanAppearInSecureEnvironment:(id)manager
 {
     return YES;
+}
+
+// widget validity and configuration (intents) are the phone's: ask its home screen
+- (BOOL)iconManager:(id)manager isWidgetValid:(id)widget
+{
+    id iconController = objcInvoke(objc_getClass("SBIconController"), @"sharedInstance");
+    return [iconController respondsToSelector:_cmd] ? ((BOOL (*)(id, SEL, id, id))objc_msgSend)(iconController, _cmd, manager, widget) : YES;
+}
+
+- (id)iconManager:(id)manager configurationDataForDataSource:(id)dataSource ofIcon:(id)icon
+{
+    id iconController = objcInvoke(objc_getClass("SBIconController"), @"sharedInstance");
+    return [iconController respondsToSelector:_cmd] ? ((id (*)(id, SEL, id, id, id))objc_msgSend)(iconController, _cmd, manager, dataSource, icon) : nil;
+}
+
+- (void)iconManager:(id)manager dataSource:(id)dataSource ofIcon:(id)icon didUpdateConfigurationData:(id)data
+{
+    id iconController = objcInvoke(objc_getClass("SBIconController"), @"sharedInstance");
+    if ([iconController respondsToSelector:_cmd])
+    {
+        ((void (*)(id, SEL, id, id, id, id))objc_msgSend)(iconController, _cmd, manager, dataSource, icon, data);
+    }
+}
+
+- (void)iconManager:(id)manager didRemoveConfigurableDataSource:(id)dataSource ofIcon:(id)icon
+{
+    id iconController = objcInvoke(objc_getClass("SBIconController"), @"sharedInstance");
+    if ([iconController respondsToSelector:_cmd])
+    {
+        ((void (*)(id, SEL, id, id, id))objc_msgSend)(iconController, _cmd, manager, dataSource, icon);
+    }
+}
+
+- (void)iconManager:(id)manager setTemporaryIntent:(id)intent forIconWithIdentifier:(id)identifier widgetUniqueIdentifier:(id)widgetIdentifier
+{
+    id iconController = objcInvoke(objc_getClass("SBIconController"), @"sharedInstance");
+    if ([iconController respondsToSelector:_cmd])
+    {
+        ((void (*)(id, SEL, id, id, id, id))objc_msgSend)(iconController, _cmd, manager, intent, identifier, widgetIdentifier);
+    }
 }
 
 // the add-widget sheet sits outside the scaled home screen: lay it out phone-sized and scale it the same way
