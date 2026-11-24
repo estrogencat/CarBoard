@@ -8,7 +8,6 @@
     if ((self = [super init]))
     {
         [self setTitle:@"Add or Remove Apps"];
-        // Sort the list by app name
         NSSortDescriptor *nameDescriptor = [[NSSortDescriptor alloc] initWithKey:@"name" ascending:YES];
         NSArray *sortDescriptors = [NSArray arrayWithObject:nameDescriptor];
         _appList = [appList sortedArrayUsingDescriptors:sortDescriptors];
@@ -45,7 +44,6 @@
 
     [[CRPreferences sharedInstance] updateValue:excludedApps forPreferenceKey:@"excludedApps"];
 
-    // Notify CarPlay of the changes
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotification:[NSNotification notificationWithName:PREFERENCES_CHANGED_NOTIFICATION object:kPrefsAppLibraryChanged]];
 }
 
@@ -67,13 +65,11 @@
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"com.carplay.rootcell"];
     }
 
-    // Get info about the current app
     NSDictionary *currentApp = _appList[indexPath.row];
     NSString *appName = currentApp[@"name"];
     NSString *appIdentifier = currentApp[@"bundleID"];
     UIImage *appIcon = [UIImage imageWithData:currentApp[@"iconImage"]];
 
-    // Setup the cell
     [[cell textLabel] setText:appName];
     [[cell imageView] setImage:appIcon];
     if ([self isAppCarplayEnabled:appIdentifier])

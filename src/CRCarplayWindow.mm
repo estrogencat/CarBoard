@@ -2,9 +2,6 @@
 #include "CRCarplayWindow.h"
 #include "CRCarAppSwitcher.h"
 
-/*
-Find the CADisplay handling the CarPlay stuff
-*/
 id getCarplayCADisplay(void)
 {
     id carplayAVDisplay = objcInvoke(objc_getClass("AVExternalDevice"), @"currentCarPlayExternalDevice");
@@ -25,7 +22,7 @@ id getCarplayCADisplay(void)
     return nil;
 }
 
-// silently skips setters 18.x doesn't have (these run on every scene update)
+// skips setters 18.x doesn't have
 static void setSceneInsets(id settings, NSString *selectorName, UIEdgeInsets insets)
 {
     SEL selector = NSSelectorFromString(selectorName);
@@ -52,7 +49,7 @@ void CRApplyCarplaySceneSettings(id settings, CRCarPlayWindow *window)
         ((void (*)(id, SEL, CGRect))objc_msgSend)(settings, NSSelectorFromString(@"setFrame:"), [window sceneFrame]);
     }
 
-    // the scene still describes the phone's display: drop its notch, status bar and home indicator space
+    // the scene still describes the phone: drop its notch, status bar and home indicator space
     for (NSString *selectorName in @[@"setPeripheryInsets:", @"setSafeAreaInsetsPortrait:", @"setSafeAreaInsetsPortraitUpsideDown:", @"setSafeAreaInsetsLandscapeLeft:", @"setSafeAreaInsetsLandscapeRight:"])
     {
         setSceneInsets(settings, selectorName, UIEdgeInsetsZero);
@@ -68,7 +65,6 @@ void CRApplyCarplaySceneSettings(id settings, CRCarPlayWindow *window)
 }
 
 @interface CRCarPlayWindow ()
-// the app's supported orientations when the window last followed them
 @property (nonatomic) unsigned long long lastSupportedOrientations;
 @property (nonatomic, copy) NSSet *launchActions;
 @end
@@ -95,9 +91,8 @@ void CRSetPadLayoutMarker(NSString *bundleIdentifier, BOOL padLayout)
 @implementation CRCarPlayWindow
 
 /*
-The scene belongs to the phone's (portrait-native) display, so its frame is in portrait coordinates and UIKit
-rotates it by the interface orientation. Hand landscape scenes the container's size swapped so the app ends up
-with the full width of the window instead of a narrow, cut-off portrait-shaped layout.
+The scene belongs to the phone's portrait display and UIKit rotates it, so landscape scenes get the container's size
+swapped to fill the window's width.
 */
 - (CGRect)sceneFrame
 {
@@ -136,12 +131,10 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
     {
         _launchActions = [launchActions copy];
         _observers = [[NSMutableArray alloc] init];
-        // Update this processes' preference cache
         [[CRPreferences sharedInstance] reloadPreferences];
         _nativeLook = [[CRPreferences sharedInstance] nativeCarplayLook];
         _appScale = [[CRPreferences sharedInstance] appScale];
 
-        // Start in landscape
         self.orientation = UIInterfaceOrientationLandscapeLeft;
 
         self.sessionStatus = [objcInvoke([objc_getClass("CARSessionStatus") alloc], @"initForCarPlayShell") autorelease];
@@ -172,17 +165,15 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
             }
             assertGotExpectedObject(displayConfiguration, @"FBSDisplayConfiguration");
 
-            // Create window on the Carplay screen
             self.rootWindow = [objcInvoke_1([objc_getClass("UIRootSceneWindow") alloc], @"initWithDisplayConfiguration:", displayConfiguration) autorelease];
 
             if (_nativeLook)
             {
-                // take the spot CarPlay gives its own apps: beside its sidebar, above its home screen (level 0)
-                // and below its sidebar host, banners, Siri and alerts (5 and up, all in the CarPlay process)
+                // beside CarPlay's sidebar, above its home screen (0), below its sidebar, banners, Siri and alerts (5+)
                 CGRect displayBounds = self.rootWindow.bounds;
                 if (CGRectIsEmpty(appFrame) || !CGRectContainsRect(displayBounds, appFrame))
                 {
-                    // opened without CarPlay's layout (e.g. by a test tool): assume a left-hand sidebar
+                    // no CarPlay layout (e.g. a test tool): assume a left-hand sidebar
                     appFrame = CGRectMake(CARPLAY_SIDEBAR_WIDTH, 0, displayBounds.size.width - CARPLAY_SIDEBAR_WIDTH, displayBounds.size.height);
                 }
                 self.rootWindow.frame = appFrame;
@@ -191,12 +182,10 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
             CRLog(@"creating %@ window on display %@ at %@", _nativeLook ? @"native" : @"overlay", objcInvoke(displayConfiguration, @"identity"), NSStringFromCGRect(self.rootWindow.frame));
         }
 
-        // CarPlay's own apps fill their area edge to edge, square; only its sidebar is a rounded panel
         [self.rootWindow.layer setCornerRadius:(_nativeLook ? 0.0f : 13.0f)];
         [self.rootWindow.layer setMasksToBounds:YES];
         if (_nativeLook)
         {
-            // CarPlay's app area is opaque, don't let its home screen show through while the app draws
             [self.rootWindow setBackgroundColor:[UIColor blackColor]];
         }
         else
@@ -207,7 +196,6 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
 
         [self setupLiveAppView];
 
-        // Add the user's wallpaper to the window. It will be visible when the app is in portrait mode
         CGRect rootWindowFrame = [[self rootWindow] frame];
 
         CGFloat dockWidth = _nativeLook ? 0.0 : CARPLAY_DOCK_WIDTH;
@@ -215,10 +203,8 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
         [[self appContainerView] setBackgroundColor:[UIColor clearColor]];
         [[self rootWindow] addSubview:[self appContainerView]];
 
-        // The scene does not show a launch image, it needs to be created manually.
         [self setupLaunchImage];
 
-        // Add the live app view
         [[self appContainerView] addSubview:objcInvoke(self.appViewController, @"view")];
         [self resizeAppViewForOrientation:self.orientation fullscreen:NO forceUpdate:YES];
 
@@ -226,8 +212,7 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
         [[self rootWindow] setAlpha:0];
         [[self rootWindow] setHidden:0];
 
-        // "unblank" the screen. This is necessary for animations/video to render when the device is locked.
-        // This does not cause the screen to actually light up
+        // keeps animations and video rendering while locked; doesn't light the screen
         if (orig_BKSDisplayServicesSetScreenBlanked) {
             orig_BKSDisplayServicesSetScreenBlanked(0);
         }
@@ -237,29 +222,22 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
             [[self rootWindow] setAlpha:1];
         } completion:nil];
 
-        // Add a placeholder "this app is on the carplay screen" view onto the app on the main screen
         id currentSceneHandle = objcInvoke(self.appViewController, @"sceneHandle");
         for (id appSceneView in CRSceneViewsForSceneHandle(currentSceneHandle, self.rootWindow))
         {
             objcInvoke(appSceneView, @"drawCarplayPlaceholder");
         }
 
-        // CarPlay tracks whether one of these windows is up, so its home button can close it
         [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.opened" object:nil userInfo:@{@"identifier": identifier}];
 
         if (_nativeLook)
         {
-            // nothing below is used without the dock: no alignment to follow, no fullscreen to leave
             return self;
         }
 
-        // Add observer the user changing the Dock's Alignment via preferences
         id observer = [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:PREFERENCES_CHANGED_NOTIFICATION object:kPrefsDockAlignmentChanged queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-            // Update this processes' preference cache
             [[CRPreferences sharedInstance] reloadPreferences];
-            // Redraw the dock
             [self setupDock];
-            // Relayout the app view
             [self resizeAppViewForOrientation:_orientation fullscreen:_isFullscreen forceUpdate:YES];
         }];
         [_observers addObject:observer];
@@ -275,29 +253,11 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
 
 - (void)setupWallpaperBackground
 {
-//     CGRect rootWindowFrame = [[self rootWindow] frame];
 
-//     UIImageView *wallpaperImageView = [[UIImageView alloc] initWithFrame:rootWindowFrame];
-//     id defaultWallpaper = objcInvoke(objc_getClass("CRSUIWallpaperPreferences"), @"defaultWallpaper");
-//     if (!defaultWallpaper) {
-//         defaultWallpaper = objcInvoke(objc_getClass("CRSUISystemWallpaper"), @"defaultWallpaper");
-//         assertGotExpectedObject(defaultWallpaper, @"CRSUISystemWallpaper");
-//     }
-//     else {
-//         assertGotExpectedObject(defaultWallpaper, @"CRSUIWallpaper");
-//     }
-
-//     UIImage *wallpaperImage = objcInvoke_1(defaultWallpaper, @"wallpaperImageCompatibleWithTraitCollection:", nil);
-//     [wallpaperImageView setImage:wallpaperImage];
-//     UIVisualEffectView *wallpaperBlurView = [[UIVisualEffectView alloc] initWithEffect:objcInvoke_1(objc_getClass("UIBlurEffect"), @"effectWithBlurRadius:", 10.0)];
-//     [wallpaperBlurView setFrame:rootWindowFrame];
-//     [wallpaperImageView addSubview:wallpaperBlurView];
-//     [[self rootWindow] addSubview:wallpaperImageView];
 }
 
 - (void)setupDock
 {
-    // If the dock already exists, remove it. This allows the dock to be redrawn easily if the user switches the alignment
     if (_dockView)
     {
         [_dockView removeFromSuperview];
@@ -309,7 +269,6 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
     CGFloat dockXOrigin = (rightHandDock) ? rootWindowFrame.size.width - CARPLAY_DOCK_WIDTH : 0;
     self.dockView = [[UIView alloc] initWithFrame:CGRectMake(dockXOrigin, rootWindowFrame.origin.y, CARPLAY_DOCK_WIDTH, rootWindowFrame.size.height)];
 
-    // Setup dock visual effects
     id blurEffect = objcInvoke_1(objc_getClass("UIBlurEffect"), @"effectWithBlurRadius:", 20.0);
     UIVisualEffectView *effectsView = [[UIVisualEffectView alloc] init];
     [effectsView setFrame:CGRectMake(0, 0, CARPLAY_DOCK_WIDTH, rootWindowFrame.size.height)];
@@ -357,10 +316,8 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
 - (void)setupLaunchImage
 {
     LOG_LIFECYCLE_EVENT;
-    // Fetch a snapshot to use
     id launchImageSnapshotManifest = objcInvoke_1([objc_getClass("XBApplicationSnapshotManifest") alloc], @"initWithApplicationInfo:", objcInvoke(self.application, @"info"));
-    // There's a few variants of snapshots offered: portait/landscape, dark/light.
-    // For now just try to find a landscape snapshot. If no landscape, fallback to portait.
+    // prefer a landscape snapshot, else portrait
     id appSnapshot = nil;
     for (id snapshotGroup in objcInvoke(launchImageSnapshotManifest, @"_allSnapshotGroups"))
     {
@@ -388,21 +345,16 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
                 }
             }
 
-            // Portait, but better than nothing
             if (!appSnapshot)
             {
                 appSnapshot = snapshotCandidate;
             }
         }
     }
-    // If no landscape image was found, queue up a snapshot once the app launches
     self.shouldGenerateSnapshot = UIInterfaceOrientationIsPortrait((UIInterfaceOrientation)objcInvokeT(appSnapshot, @"interfaceOrientation", int));
 
-    // Get the image from the chosen snapshot
     id appSnapshotImage = appSnapshot ? objcInvoke_1(appSnapshot, @"imageForInterfaceOrientation:", (long long)1) : nil;
 
-    // Build an imageview to contain the launch image.
-    // The processLaunched handler defined above is responsible for cleaning this up
     self.launchImageView = [[[UIImageView alloc] initWithFrame:CGRectMake(0, 0, [[self appContainerView] frame].size.width, [[self appContainerView] frame].size.height)] autorelease];
     [self.launchImageView setImage:appSnapshotImage];
     [self.launchImageView setContentMode:UIViewContentModeScaleToFill];
@@ -437,7 +389,6 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
         sceneIdentity = objcInvoke_3(displaySceneManager, @"_sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:", self.application, 1, @"UIWindowSceneSessionRoleApplication");
     }
     else if ([displaySceneManager respondsToSelector:NSSelectorFromString(@"sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:")]) {
-        // 18.x
         sceneIdentity = ((id (*)(id, SEL, id, BOOL, id))objc_msgSend)(displaySceneManager, NSSelectorFromString(@"sceneIdentityForApplication:createPrimaryIfRequired:sceneSessionRole:"), self.application, YES, @"UIWindowSceneSessionRoleApplication");
     }
     else if ([displaySceneManager respondsToSelector:NSSelectorFromString(@"newSceneIdentityForApplication:")]) {
@@ -480,8 +431,7 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
         assertGotExpectedObject(appProcess, @"FBProcess");
 
         objcInvoke_1(appProcess, @"_executeBlockAfterLaunchCompletes:", ^void(void) {
-            // Wait a sec then remove the splashscreen image. It should already be hidden/covered by the live app view, but it needs to be removed
-            // so it doesn't poke through if the App's orientation changes to portait
+            // remove the launch image so it can't poke through on rotation
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                 [self.launchImageView removeFromSuperview];
 
@@ -504,8 +454,7 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
 
                 if (self.shouldGenerateSnapshot)
                 {
-                    // Now that the app is launched and presumably in landscape mode, save a snapshot.
-                    // If an app does not natively support landscape mode and doesn't ship a landscape launch image, this snapshot can be used during cold-launches
+                    // a landscape snapshot for cold launches of apps without a landscape launch image
 
                     id snapshotContext = objcInvoke_2(objc_getClass("FBSSceneSnapshotContext"), @"contextWithSceneID:settings:", objcInvoke(appScene, @"identifier"), sceneSettings);
                     objcInvoke_1(snapshotContext, @"setName:", @"CarPlayLaunchImage");
@@ -515,7 +464,6 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
                 }
             });
 
-            // Ask the app to rotate to landscape
             [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.orientation" object:appIdentifier userInfo:@{@"orientation": @(self.orientation)}];
         });
     });
@@ -531,10 +479,9 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
     objcInvoke_3(appView, @"setDisplayMode:animationFactory:completion:", (long long)4, animationFactory, nil);
     [[self.appViewController view] setBackgroundColor:[UIColor clearColor]];
 
-    // Create a scene monitor to watch for the app process dying. The carplay window will dismiss itself.
+    // closes the window when the app process dies
     NSString *sceneID = objcInvoke(sceneIdentity, @"identifier");
     if (sceneID) {
-        // the identity we created the scene with already knows its id
     }
     else if ([sceneLayoutManager respondsToSelector:NSSelectorFromString(@"primarySceneIdentifierForBundleIdentifier:sceneSessionRole:displayIdentity:")]) {
         sceneID = objcInvoke_3(sceneLayoutManager, @"primarySceneIdentifierForBundleIdentifier:sceneSessionRole:displayIdentity:", appIdentifier, @"UIWindowSceneSessionRoleApplication", mainScreenIdentity);
@@ -550,22 +497,15 @@ with the full width of the window instead of a narrow, cut-off portrait-shaped l
     objcInvoke_1(self.sceneMonitor, @"setDelegate:", self);
 }
 
-/*
-FBSceneMonitor delegate method, invoked when the app process dies.
-Use this to close the window on the CarPlay screen if the app crashes or is killed via the App Switcher on main screen
-*/
 - (void)sceneMonitor:(id)arg1 sceneWasDestroyed:(id)arg2
 {
     LOG_LIFECYCLE_EVENT;
-    // Close the window
     objcInvoke(self, @"dismiss");
 }
 
 - (void)handleScreenTapped
 {
     LOG_LIFECYCLE_EVENT;
-    // The carplay screen was tapped.
-    // If the window is fullscreen'd, exit fullscreen
     if (_isFullscreen)
     {
         [self exitFullscreen];
@@ -590,9 +530,6 @@ Use this to close the window on the CarPlay screen if the app crashes or is kill
     } completion:nil];
 }
 
-/*
-When a CarPlay App is closed: our home button, CarPlay's home button, another app taking the screen, or the app dying
-*/
 - (void)dismiss
 {
     // CarPlay and SpringBoard can both ask while the fade-out runs
@@ -604,17 +541,15 @@ When a CarPlay App is closed: our home button, CarPlay's home button, another ap
     [[CRCarAppSwitcher sharedInstance] noteAppLeaving:[self bundleIdentifier] window:self.rootWindow];
 
     LOG_LIFECYCLE_EVENT;
-    // Invalidate the scene monitor
     [self.sceneMonitor invalidate];
 
-    // Remove any observers. The tokens' blocks hold on to self, so drop them too
+    // the tokens' blocks retain self
     for (id observer in _observers)
     {
         [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] removeObserver:observer];
     }
     [_observers removeAllObjects];
 
-    // Disable the screen-tap recognizer (overlay look only)
     if (_screenTapRecognizer)
     {
         id systemGestureManager = objcInvoke(objc_getClass("_UISystemGestureManager"), @"sharedInstance");
@@ -628,15 +563,13 @@ When a CarPlay App is closed: our home button, CarPlay's home button, another ap
     void (^cleanupAfterCarplay)() = ^() {
         id sharedApp = [UIApplication sharedApplication];
         NSString *hostedBundleID = objcInvoke(self.application, @"bundleIdentifier");
-        // the same app reopened while this window faded out: the app stays on CarPlay, under the new window
+        // the same app reopened while this one faded out stays on CarPlay
         CRCarPlayWindow *replacement = objc_getAssociatedObject(sharedApp, &kPropertyKey_liveCarplayWindow);
         BOOL appStaysOnCarplay = replacement && replacement != self && hostedBundleID && [[replacement bundleIdentifier] isEqualToString:hostedBundleID];
 
         if (!appStaysOnCarplay)
         {
-            // a relaunch on the phone is an iPhone app again
             CRSetPadLayoutMarker(hostedBundleID, NO);
-            // Notify the application process to stop enforcing an orientation lock
             int resetOrientationLock = -1;
             NSString *hostedIdentifier = getIvar(self.appViewController, @"_identifier");
             [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.orientation" object:hostedIdentifier userInfo:@{@"orientation": @(resetOrientationLock)}];
@@ -645,8 +578,7 @@ When a CarPlay App is closed: our home button, CarPlay's home button, another ap
         [self.rootWindow setHidden:YES];
         objcInvoke_1(self.appViewController, @"_setCurrentMode:", (long long)0);
 
-        // Find the main sceen's sceneView for the dismissing app and put it in LiveContent mode (from PlaceHolder mode)
-        // This removes the placeholder view visible in the app switcher
+        // takes the placeholder off the app's phone scene
         id currentSceneHandle = objcInvoke(self.appViewController, @"sceneHandle");
         if (!appStaysOnCarplay)
         {
@@ -656,8 +588,7 @@ When a CarPlay App is closed: our home button, CarPlay's home button, another ap
             }
         }
 
-        // After the scene returns to the device, release the assertion that prevents suspension.
-        // Only this window's: a replacement window for the same app added its own
+        // only this window's assertion; a replacement for the same app added its own
         NSMutableArray *lockAssertions = objc_getAssociatedObject(sharedApp, &kPropertyKey_lockAssertionIdentifiers);
         NSUInteger assertionIndex = hostedBundleID ? [lockAssertions indexOfObject:hostedBundleID] : NSNotFound;
         if (assertionIndex != NSNotFound)
@@ -668,7 +599,6 @@ When a CarPlay App is closed: our home button, CarPlay's home button, another ap
         id appScene = objcInvoke(currentSceneHandle, @"sceneIfExists");
         if (appScene != nil && !appStaysOnCarplay)
         {
-            // Send the app to the background *if it is not on the main screen*
             id frontmostApp = objcInvoke(sharedApp, @"_accessibilityFrontMostApplication");
             BOOL isAppOnMainScreen = frontmostApp && [objcInvoke(frontmostApp, @"bundleIdentifier") isEqualToString:hostedBundleID];
             if (!isAppOnMainScreen)
@@ -682,7 +612,6 @@ When a CarPlay App is closed: our home button, CarPlay's home button, another ap
             }
         }
 
-        // If the device is locked and screen off, set the screen state to off
         if (objcInvokeT(sharedApp, @"isLocked", BOOL) == YES)
         {
             void *_BKSHIDServicesGetBacklightFactor = dlsym(RTLD_DEFAULT, "BKSHIDServicesGetBacklightFactor");
@@ -693,18 +622,14 @@ When a CarPlay App is closed: our home button, CarPlay's home button, another ap
             }
         }
 
-        // todo: resign first responder (kb causes glitches on return)
         [self.rootWindow removeFromSuperview];
-        // the property owns the window; releasing it here as well was an over-release
         self.rootWindow = nil;
 
-        // a new window may already have replaced this one (switching apps), don't clear that one.
-        // drops the last reference to self, keep it last
+        // a new window may have replaced this one; this drops the last reference to self, keep it last
         if (objc_getAssociatedObject(sharedApp, &kPropertyKey_liveCarplayWindow) == self)
         {
             objc_setAssociatedObject(sharedApp, &kPropertyKey_liveCarplayWindow, nil, OBJC_ASSOCIATION_RETAIN);
         }
-        // back to the phone, or onto the window that replaced this one
         CRRelayoutCarplayKeyboards();
     };
 
@@ -717,9 +642,6 @@ When a CarPlay App is closed: our home button, CarPlay's home button, another ap
     }];
 }
 
-/*
-When the "rotate orientation" button is pressed on a CarplayEnabled app window
-*/
 - (void)handleRotate
 {
     LOG_LIFECYCLE_EVENT;
@@ -731,7 +653,6 @@ When the "rotate orientation" button is pressed on a CarplayEnabled app window
     id appScene = objcInvoke(objcInvoke([self appViewController], @"sceneHandle"), @"sceneIfExists");
     if (!appScene)
     {
-        // The scene doesn't exist - maybe the app hasn't finished launching yet
         return;
     }
 
@@ -741,9 +662,7 @@ When the "rotate orientation" button is pressed on a CarplayEnabled app window
     [self resizeAppViewForOrientation:desiredOrientation fullscreen:self.isFullscreen forceUpdate:NO];
 }
 
-/*
-Orientations the app can be shown in: what the running app asks for, else what its Info.plist declares (0 if unknown)
-*/
+// what the running app asks for, else its Info.plist (0 if unknown)
 - (unsigned long long)appSupportedOrientations
 {
     SEL supportedSel = NSSelectorFromString(@"supportedInterfaceOrientations");
@@ -766,7 +685,6 @@ Orientations the app can be shown in: what the running app asks for, else what i
     return 0;
 }
 
-// the current orientation if the mask allows it, else the first allowed of landscape, portrait, the other landscape
 - (UIInterfaceOrientation)orientationFittingMask:(unsigned long long)mask
 {
     if (mask == 0 || (mask & (1ULL << self.orientation)))
@@ -783,9 +701,7 @@ Orientations the app can be shown in: what the running app asks for, else what i
     return self.orientation;
 }
 
-/*
-Only reacts when the app's supported orientations change, so the overlay look's rotate button still wins otherwise
-*/
+// only on changes, so the rotate button still wins otherwise
 - (void)followAppSupportedOrientations
 {
     if (_isDismissing)
@@ -807,9 +723,6 @@ Only reacts when the app's supported orientations change, so the overlay look's 
     }
 }
 
-/*
-Handle resizing the Carplay App window. Called anytime the app orientation changes (including first appearance)
-*/
 - (void)resizeAppViewForOrientation:(UIInterfaceOrientation)desiredOrientation fullscreen:(BOOL)fullscreen forceUpdate:(BOOL)forceUpdate
 {
     LOG_LIFECYCLE_EVENT;
@@ -818,7 +731,7 @@ Handle resizing the Carplay App window. Called anytime the app orientation chang
         return;
     }
 
-    // set before touching the scene: the FBScene hook reads the window's orientation
+    // the FBScene hook reads the window's orientation
     self.orientation = desiredOrientation;
     self.isFullscreen = fullscreen;
 
@@ -868,14 +781,12 @@ Handle resizing the Carplay App window. Called anytime the app orientation chang
 
     CRLog(@"layout: screen scale %.2f root %@ container %@ sceneFrame %@ appView %@", self.rootWindow.screen.scale, NSStringFromCGRect(rootBounds), NSStringFromCGRect(self.appContainerView.bounds), NSStringFromCGRect(sceneFrame), NSStringFromCGRect(appView.frame));
 
-    // Update last known orientation and fullscreen status
     self.orientation = desiredOrientation;
     self.isFullscreen = fullscreen;
 }
 
 - (BOOL)shouldUseRightHandDock
 {
-    // Should the dock be drawn on the left or right side of the screen
     switch ([[CRPreferences sharedInstance] dockAlignment])
     {
         case CRDockAlignmentLeft:
@@ -884,7 +795,6 @@ Handle resizing the Carplay App window. Called anytime the app orientation chang
             return YES;
         case CRDockAlignmentAuto:
         {
-            // Auto mode - determine which alignment Carplay is using and mimick it
             id carplaySession = objcInvoke(self.sessionStatus, @"session");
             id usesRightHand = objcInvoke_1(carplaySession, @"_endpointValueForKey:", @"RightHandDrive");
             return [usesRightHand boolValue];

@@ -38,7 +38,6 @@
 #define getIvar(object, ivar) [object valueForKey:ivar]
 #define setIvar(object, ivar, value) [object setValue:value forKey:ivar]
 
-// NSLog plus a plain file, since syslog isn't easy to read on-device
 #define CR_LOG_PATH "/var/mobile/Library/Logs/carplayenable.log"
 __unused static void CRLog(NSString *format, ...) {
     va_list args;
@@ -81,10 +80,9 @@ __unused static void LogSelectorError(id object, SEL selector) {
 #define objcInvoke_2(a, b, c, d) ((id (*)(id, SEL, typeof(c), typeof(d)))objc_msgSend)(a, NSSelectorFromString(b), c, d)
 #define objcInvoke_3(a, b, c, d, e) ((id (*)(id, SEL, typeof(c), typeof(d), typeof(e)))objc_msgSend)(a, NSSelectorFromString(b), c, d, e)
 
-// only sends if the target implements it (avoids unrecognized-selector crashes in SpringBoard)
 #define objcInvokeIf_1(a, b, c) do { SEL _s = NSSelectorFromString(b); if ([(a) respondsToSelector:_s]) ((void (*)(id, SEL, typeof(c)))objc_msgSend)(a, _s, c); else LogSelectorError(a, _s); } while (0)
 
-// bundle id of the process behind an FBScene; 18.x dropped -client
+// 18.x dropped -client
 static inline NSString *CRBundleIDForScene(id scene) {
     if (!scene) return nil;
     if ([scene respondsToSelector:NSSelectorFromString(@"clientProcess")]) {
@@ -95,11 +93,7 @@ static inline NSString *CRBundleIDForScene(id scene) {
     return [handle valueForKey:@"bundleIdentifier"];
 }
 
-/*
-Does this app have an icon on the phone's home screen, or is it one of the ~150 background services (view services,
-"angels", UI hosts) iOS also registers as apps? Decides which of Apple's own apps CarPlay shows.
-record: an LSApplicationRecord
-*/
+// a real home screen app, not one of the ~150 background services iOS also registers as apps
 static inline BOOL CRAppRecordHasHomeScreenIcon(id record)
 {
     if (!record)
@@ -126,7 +120,6 @@ static inline BOOL CRAppRecordHasHomeScreenIcon(id record)
         return NO;
     }
 
-    // apps that stay off the home screen until they switch themselves on (Sidecar, PreviewShell)
     id infoDictionary = [record respondsToSelector:NSSelectorFromString(@"infoDictionary")] ? ((id (*)(id, SEL))objc_msgSend)(record, NSSelectorFromString(@"infoDictionary")) : nil;
     SEL objectForKeyOfClass = NSSelectorFromString(@"objectForKey:ofClass:");
     if ([infoDictionary respondsToSelector:objectForKeyOfClass])
@@ -146,8 +139,7 @@ static inline BOOL CRAppRecordHasHomeScreenIcon(id record)
 #define kPropertyKey_lockAssertionIdentifiers *NSSelectorFromString(@"lockAssertions")
 static char *kPropertyKey_didDrawPlaceholder;
 
-// Preferences
-// /var/jb/Library/Preferences is root-owned, the prefs pane (mobile) can't write there
+// the prefs pane runs as mobile and cannot write to /var/jb/Library/Preferences
 #define PREFERENCES_PLIST_PATH @"/var/mobile/Library/Preferences/com.carplayenable.preferences.plist"
 #define PREFERENCES_CHANGED_NOTIFICATION @"com.carplay.preferences.changed"
 #define PREFERENCES_APP_DATA_NOTIFICATION @"com.carplay.prefs.app_data"
@@ -161,38 +153,24 @@ static char *kPropertyKey_didDrawPlaceholder;
 #define kPrefsDockChanged @"dock"
 
 #define CARPLAY_DOCK_WIDTH 40
-// CarPlay's own sidebar, for when its layout wasn't passed along
 #define CARPLAY_SIDEBAR_WIDTH 45
 
-// SpringBoard mode: SpringBoard's icon on CarPlay's home screen swaps CarPlay's home screen for SpringBoard's
 #define kCRSpringBoardBundleID @"com.apple.springboard"
 #define kCRDashBoardBundleID @"com.apple.CarPlayApp"
-// SpringBoard -> CarPlay, userInfo active: whether SpringBoard's home screen stands in for CarPlay's
 #define kCRSpringBoardModeStateNotification @"com.carplayenable.sbmode.state"
-// CarPlay -> SpringBoard, userInfo showing: CarPlay went home (YES) or one of its own apps took the screen (NO)
 #define kCRSpringBoardModeShowNotification @"com.carplayenable.sbmode.show"
-// CarPlay -> SpringBoard: back to CarPlay's own home screen
 #define kCRSpringBoardModeExitNotification @"com.carplayenable.sbmode.exit"
-// SpringBoard -> CarPlay, userInfo identifier: open that app's own CarPlay UI
 #define kCRSpringBoardModeOpenNativeNotification @"com.carplayenable.sbmode.opennative"
-// CarPlay -> SpringBoard: its home button pressed twice in SpringBoard mode (the car app switcher), or once
 #define kCRAppSwitcherShowNotification @"com.carplayenable.sbmode.switcher.show"
 #define kCRHomePressedNotification @"com.carplayenable.sbmode.home"
-// CarPlay -> SpringBoard, userInfo appFrame: CarPlay (re)started; bring SpringBoard mode back if it was left on
 #define kCRSpringBoardModeRestoreNotification @"com.carplayenable.sbmode.restore"
-// iPad layout: marker SpringBoard leaves in the app's tmp folder; app -> SpringBoard (userInfo pid) when it started so
-// SpringBoard -> CarPlay: send the car's own icon; CarPlay -> SpringBoard (userInfo name, image): here it is
 #define kCRCarIconRequestNotification @"com.carplayenable.caricon.request"
 #define kCRCarIconInfoNotification @"com.carplayenable.caricon.info"
-// SpringBoard -> CarPlay: open the car's own screens (its icon was tapped)
 #define kCRCarIconLaunchNotification @"com.carplayenable.caricon.launch"
 #define kCRPadLayoutMarkerName @"com.carplayenable.padlayout"
 #define kCRPadLayoutLaunchedNotification @"com.carplayenable.padlayout.launched"
 
-/*
-Scale the CarPlay window draws the (phone-sized) keyboard at: as wide as the app container, but never covering more than
-about half of it. SpringBoard uses it to draw the keyboard, the hosted app to report the same keyboard frame.
-*/
+// the car keyboard's scale: the app container's width, at most about half its height
 static inline CGFloat CRCarplayKeyboardScale(CGSize containerSize, CGSize uprightScreenSize, CGFloat keyboardHeight)
 {
     CGFloat scale = containerSize.width / uprightScreenSize.width;

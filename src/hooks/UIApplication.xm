@@ -1,15 +1,10 @@
 #include "../common.h"
 
-/*
-Injected into User Applications
-*/
 %group APPS
 
 static int orientationOverride = -1;
-// height SpringBoard draws the keyboard at on the CarPlay screen, in window points (0 until it says)
 static CGFloat carplayKeyboardHeight;
-// the system's userInfo and object (its UIScreen) for the keyboard currently on screen, to re-report it when that
-// height changes. Telegram only measures against its own window when the object is a screen
+// re-reported when the car keyboard's height changes; Telegram needs the object to be a screen
 static NSDictionary *visibleKeyboardInfo;
 static id visibleKeyboardObject;
 
@@ -22,7 +17,6 @@ static BOOL CRIsKeyboardFrameNotification(NSString *name)
         [name isEqualToString:UIKeyboardWillChangeFrameNotification] || [name isEqualToString:UIKeyboardDidChangeFrameNotification];
 }
 
-// the system's frames are in the phone screen's portrait or landscape space; the keyboard spans that space's width
 static BOOL CRKeyboardFrameIsOnScreen(CGRect frame, CGSize screenSize)
 {
     CGFloat shortSide = MIN(screenSize.width, screenSize.height);
@@ -30,14 +24,9 @@ static BOOL CRKeyboardFrameIsOnScreen(CGRect frame, CGSize screenSize)
     return frame.size.height > 0 && CGRectGetMinY(frame) < spaceHeight - 0.5;
 }
 
-/*
-The keyboard reports its frame on the phone's screen, and not even consistently (it can give just the bottom bar),
-but the CarPlay window draws it scaled down along the bottom of the app. Report that frame instead, so the app moves
-its content above what is actually drawn.
-*/
+// report the keyboard frame as drawn on the car, so the app moves its content above it
 static NSDictionary *CRCarplayKeyboardUserInfo(NSString *name, id object, NSDictionary *userInfo)
 {
-    // postNotificationName: may land in postNotification:, only patch once
     UIWindow *keyWindow = objcInvoke([UIApplication sharedApplication], @"keyWindow");
     if (!keyWindow || userInfo[kCRPatchedKeyboardInfoKey])
     {
@@ -61,7 +50,6 @@ static NSDictionary *CRCarplayKeyboardUserInfo(NSString *name, id object, NSDict
             continue;
         }
         CGRect frame = [value CGRectValue];
-        // a keyboard that's off the bottom of the phone's screen stays just below the window
         BOOL onScreen = !hiding && CRKeyboardFrameIsOnScreen(frame, screenSize);
         if ([key isEqualToString:UIKeyboardFrameEndUserInfoKey])
         {
@@ -86,22 +74,15 @@ static NSDictionary *CRCarplayKeyboardUserInfo(NSString *name, id object, NSDict
 
 %hook UIApplication
 
-/*
-When the app is launched
-*/
 - (id)init
 {
     id _self = %orig;
-    // Register for "orientation change" notifications
     NSString *bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:_self selector:NSSelectorFromString(@"handleRotationRequest:") name:@"com.carplayenable.orientation" object:bundleIdentifier];
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserver:_self selector:NSSelectorFromString(@"handleCarplayKeyboardHeight:") name:@"com.carplayenable.keyboard" object:bundleIdentifier];
     return _self;
 }
 
-/*
-When Carplay window is requesting the app to rotate
-*/
 %new
 - (void)handleRotationRequest:(id)notification
 {
@@ -113,11 +94,9 @@ When Carplay window is requesting the app to rotate
     {
         carplayKeyboardHeight = 0;
         orientationToRequest = [[UIDevice currentDevice] orientation];
-        // 0 = unknown, 5/6 = face up/down: not interface orientations
         orientationToRequest = (orientationToRequest < 1 || orientationToRequest > 4) ? 1 : orientationToRequest;
     }
 
-    // might not be created yet...
     UIWindow *keyWindow = objcInvoke([UIApplication sharedApplication], @"keyWindow");
     if (keyWindow)
     {
@@ -125,10 +104,7 @@ When Carplay window is requesting the app to rotate
     }
 }
 
-/*
-SpringBoard drew the keyboard at a new height. Usually that arrives after the system's own keyboard notifications,
-so tell the app again about the keyboard that is up
-*/
+// the car keyboard's height usually arrives after the system's notifications, so tell the app again
 %new
 - (void)handleCarplayKeyboardHeight:(id)notification
 {
@@ -172,10 +148,7 @@ so tell the app again about the keyboard that is up
 
 %end
 
-/*
-A portrait app shown in CarPlay's wide app area still gets the phone's portrait keyboard. Turn just the keyboard's
-window landscape there; SpringBoard rotates it upright on the car like a landscape app's
-*/
+// a portrait app in CarPlay's wide app area gets a landscape keyboard
 static long long CRKeyboardOrientation(long long orientation)
 {
     if (orientationOverride != UIInterfaceOrientationPortrait)
@@ -195,11 +168,7 @@ static CGPoint *CRTouchPointIvar(UITouch *touch, const char *name)
 
 %hook UIRemoteKeyboardWindow
 
-/*
-A touch on the app's own scene is tried on the keyboard first, in the app's coordinates. On the car the two scenes are
-scaled and placed apart, so that lands on keys that aren't there: only touches the window server gave the keyboard's
-scene count.
-*/
+// app touches are tried on the keyboard first in the app's coordinates, which don't match on the car: only take the keyboard scene's own
 - (id)_hitTest:(CGPoint)point withEvent:(id)event windowServerHitTestWindow:(UIWindow *)serverWindow
 {
     UIWindow *window = (UIWindow *)self;
@@ -207,10 +176,7 @@ scene count.
     return otherScene ? nil : %orig;
 }
 
-/*
-A new touch on a turned keyboard is stored clamped to the portrait screen's width, so its right half can't be tapped
-(moves aren't clamped). The hit test just before sees the real point: remember it, and put it back on the touch
-*/
+// a new touch on a turned keyboard is clamped to the portrait width; put the real point back from the hit test
 static CGPoint lastKeyboardHitPoint;
 static CFTimeInterval lastKeyboardHitTime;
 
@@ -297,9 +263,6 @@ static CFTimeInterval lastKeyboardHitTime;
 
 %end
 
-/*
-Called when a window intends to rotate to a new orientation. Used to force landscape/portrait
-*/
 %hook UIWindow
 
 - (void)_setRotatableViewOrientation:(long long)orientation duration:(double)duration force:(BOOL)force
@@ -316,10 +279,7 @@ Called when a window intends to rotate to a new orientation. Used to force lands
 
 %end
 
-/*
-While the app is on CarPlay the render server keeps reporting its video layers as not visible (its scene belongs to
-the phone's display), and the video renderer stops drawing frames. Keep them visible while hosted.
-*/
+// the render server reports a car app's video layers as not visible, which stops video frames
 %group VIDEO_SAMPLE_BUFFER
 
 %hook AVSampleBufferDisplayLayer
@@ -333,7 +293,6 @@ the phone's display), and the video renderer stops drawing frames. Keep them vis
 
 %end
 
-// AVPlayerLayer draws through this one
 %group VIDEO_PLAYER
 
 %hook FigVideoLayer
@@ -347,15 +306,10 @@ the phone's display), and the video renderer stops drawing frames. Keep them vis
 
 %end
 
-/*
-iPad layout setting: SpringBoard leaves a marker in the app's tmp folder when it opens the app on the car. The app
-then starts as an iPad app (sidebars, split views). Its scenes get iPad traits, but not the keyboard's, which stays
-the phone keyboard the car layout is built for
-*/
+// iPad layout: a marker from SpringBoard starts the app as an iPad app, while the keyboard stays the phone's
 %group PAD
 
-// the app's own code asks from its bundle; the system's (the keyboard among it) from /System or /usr
-// Apple's apps keep most of their code in system frameworks (UIKit included): there only the keyboard counts as the system
+// the app's own code gets iPad, the system (the keyboard) the phone; for Apple's apps only the keyboard counts as the system
 static BOOL isAppleApp;
 
 static BOOL CRCallerIsSystem(void *returnAddress)
@@ -379,7 +333,6 @@ static BOOL CRCallerIsSystem(void *returnAddress)
 
 %hook UIDevice
 
-// iPad to the app, so it picks its iPad layout; the system keeps the phone's (its keyboard is the one the car shows)
 - (UIUserInterfaceIdiom)userInterfaceIdiom
 {
     return CRCallerIsSystem(__builtin_return_address(0)) ? %orig : UIUserInterfaceIdiomPad;
@@ -397,7 +350,7 @@ static BOOL CRCallerIsSystem(void *returnAddress)
 
 %end
 
-// the iPad's orientations (UIKit and many apps answer with the iPhone's, often portrait-only)
+// UIKit and many apps answer with the iPhone's, often portrait-only
 %hook UIApplication
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientationsForWindow:(UIWindow *)window
@@ -406,7 +359,6 @@ static BOOL CRCallerIsSystem(void *returnAddress)
     NSArray *names = info[@"UISupportedInterfaceOrientations~ipad"];
     if (![names isKindOfClass:[NSArray class]] || !names.count)
     {
-        // an iPad app that can share the screen turns every way there
         NSArray *families = info[@"UIDeviceFamily"];
         BOOL iPadApp = [families isKindOfClass:[NSArray class]] && [families containsObject:@2];
         return iPadApp && ![info[@"UIRequiresFullScreen"] boolValue] ? UIInterfaceOrientationMaskAll : %orig;
@@ -428,10 +380,7 @@ static BOOL CRCallerIsSystem(void *returnAddress)
 %end
 
 
-/*
-The car window is narrower than an iPad in landscape (992 vs 1133 points at 60%), so split views left to choose for
-themselves overlay their list and open on the detail alone. Side by side, once, as a wider iPad would
-*/
+// the car window is narrower than a landscape iPad, so tile split views side by side once
 static char kCRSplitViewTiledKey;
 
 %hook UISplitViewController
@@ -482,27 +431,24 @@ static char kCRSplitViewTiledKey;
 {
     BAIL_IF_UNSUPPORTED_IOS;
 
-    // Only need to inject into User Apps (+ jailbreak) apps
     NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
     NSString *bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
     if (![bundlePath containsString:@".app"] || [bundleIdentifier isEqualToString:kCRSpringBoardBundleID] || [bundleIdentifier isEqualToString:kCRDashBoardBundleID])
     {
         return;
     }
-    // Apple's apps too (any with a data container, where SpringBoard leaves the marker)
     NSString *padMarker = [NSTemporaryDirectory() stringByAppendingPathComponent:kCRPadLayoutMarkerName];
     if ([[NSFileManager defaultManager] fileExistsAtPath:padMarker])
     {
         isAppleApp = [bundleIdentifier hasPrefix:@"com.apple."];
         %init(PAD);
-        // only for this launch: a respring on the car can't leave the phone with an iPad app
+        // only for this launch, so a respring can't leave the phone with an iPad app
         [[NSFileManager defaultManager] removeItemAtPath:padMarker error:nil];
         [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:kCRPadLayoutLaunchedNotification object:bundleIdentifier userInfo:@{@"pid": @(getpid())}];
     }
     if (![bundleIdentifier containsString:@"com.apple."])
     {
         %init(APPS);
-        // not every app loads AVFoundation
         if (objc_getClass("AVSampleBufferDisplayLayer"))
         {
             %init(VIDEO_SAMPLE_BUFFER);

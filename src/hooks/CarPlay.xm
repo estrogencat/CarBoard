@@ -1,8 +1,5 @@
 #include "../common.h"
 
-/*
-Injected into the CarPlay process (com.apple.CarPlayApp, code in DashBoard.framework)
-*/
 %group CARPLAY
 
 struct SBIconImageInfo {
@@ -13,7 +10,6 @@ struct SBIconImageInfo {
 
 static NSString *const kForcedAppTag = @"CarPlayEnable";
 
-// Apple apps found to have a home screen icon (filled by the library's identity filter, which may run off the main thread)
 static NSMutableSet *appleAppsWithIcons;
 
 static void noteAppleAppIdentity(id identity)
@@ -39,11 +35,7 @@ static void noteAppleAppIdentity(id identity)
     }
 }
 
-/*
-Apps that aren't excluded in preferences get forced onto the dashboard. Apple's own only when they have an icon on the
-phone's home screen: iOS registers ~150 background services as apps too. Jailbreak and TrollStore apps report as
-"System", so the identifier (and the icon check) decides it, not the app type.
-*/
+// Apple's apps only with a phone home screen icon (iOS registers ~150 services as apps); jailbreak apps report as "System", so the identifier decides
 static BOOL shouldForceBundleIdentifier(NSString *bundleID)
 {
     if (!bundleID)
@@ -70,10 +62,7 @@ static BOOL isForcedAppInfo(id appInfo)
     return [objcInvoke(appInfo, @"tags") containsObject:kForcedAppTag];
 }
 
-/*
-Give an app a fake CarPlay declaration so DashBoard treats it like a non-template (Maps-style) app.
-If the app already supports CarPlay it's left alone.
-*/
+// a fake CarPlay declaration so DashBoard treats the app like a non-template (Maps-style) one
 static void addCarplayDeclarationToAppInfo(id appInfo)
 {
     if (!appInfo || getIvar(appInfo, @"_carPlayDeclaration") != nil)
@@ -83,7 +72,7 @@ static void addCarplayDeclarationToAppInfo(id appInfo)
 
     NSString *appBundleID = objcInvoke(appInfo, @"bundleIdentifier");
     NSArray *existingTags = objcInvoke(appInfo, @"tags");
-    // SpringBoard is tagged hidden and has no icon of its own, but its icon is the way into SpringBoard mode
+    // SpringBoard is hidden and iconless, but its icon opens SpringBoard mode
     if ([appBundleID isEqualToString:kCRSpringBoardBundleID])
     {
         existingTags = nil;
@@ -94,14 +83,13 @@ static void addCarplayDeclarationToAppInfo(id appInfo)
     }
 
     id carplayDeclaration = [[[objc_getClass("CRCarPlayAppDeclaration") alloc] init] autorelease];
-    // not template-driven: otherwise the template host keeps spinning up looking for a template that doesn't exist
+    // otherwise the template host keeps looking for a template that doesn't exist
     objcInvoke_1(carplayDeclaration, @"setSupportsTemplates:", NO);
     objcInvoke_1(carplayDeclaration, @"setSupportsMaps:", YES);
     objcInvoke_1(carplayDeclaration, @"setBundleIdentifier:", appBundleID);
     objcInvoke_1(carplayDeclaration, @"setBundlePath:", [objcInvoke(appInfo, @"bundleURL") path]);
     setIvar(appInfo, @"_carPlayDeclaration", carplayDeclaration);
 
-    // tag it so launches can tell it was forced
     NSArray *newTags = @[kForcedAppTag];
     if (existingTags)
     {
@@ -116,9 +104,6 @@ static id currentDockController(void)
     return objcInvoke(objcInvoke(dashboard, @"rootViewController"), @"appDockViewController");
 }
 
-/*
-Put the app in the dock's recents, the same way a real launch would
-*/
 static void recordAppLaunch(NSString *bundleID)
 {
     id appHistory = objcInvoke([UIApplication sharedApplication], @"_currentAppHistory");
@@ -136,23 +121,18 @@ static void recordAppLaunch(NSString *bundleID)
 
     id dockController = currentDockController();
     objcInvoke(dockController, @"_refreshAppDock");
-    // DashBoard disables the dock while it waits for a scene that never comes for forced apps
+    // DashBoard disables the dock while waiting for a scene that never comes
     if (dockController)
     {
         objcInvoke_1(dockController, @"setDockEnabled:", YES);
     }
 }
 
-// whether SpringBoard has one of our app windows up (it says when one opens or closes)
 static BOOL hostedAppShowing;
-// whether SpringBoard's home screen stands in for CarPlay's (it says)
 static BOOL springBoardModeActive;
-// context of the home event we send to close a native app, so it isn't taken for the user's
+// so our own home event isn't taken for the user's
 static NSString *const kOwnHomeEventContext = @"CarPlayEnable: close native app";
 
-/*
-Where CarPlay puts its own apps: its main window minus the sidebar (left, right or bottom depending on the car)
-*/
 static CGRect carplayAppFrame(void)
 {
     id dashboard = objcInvoke([UIApplication sharedApplication], @"_currentDashboard");
@@ -166,9 +146,6 @@ static CGRect carplayAppFrame(void)
     return UIEdgeInsetsInsetRect(mainWindowFrame, statusBarInsets);
 }
 
-/*
-Ask SpringBoard to host the app on the CarPlay screen
-*/
 static void requestCarplayLaunch(NSString *bundleID)
 {
     LOG_LIFECYCLE_EVENT;
@@ -182,7 +159,6 @@ static void requestCarplayLaunch(NSString *bundleID)
     recordAppLaunch(bundleID);
 }
 
-// what fills CarPlay's app area in a workspace state: its home screen, an app, Siri, an OEM screen...
 static id workspaceBaseEntity(id state)
 {
     return [state respondsToSelector:NSSelectorFromString(@"baseEntity")] ? objcInvoke(state, @"baseEntity") : nil;
@@ -194,7 +170,7 @@ static BOOL entityIsHomescreen(id entity)
     return [entity respondsToSelector:isHomescreen] && ((BOOL (*)(id, SEL))objc_msgSend)(entity, isHomescreen);
 }
 
-// CarPlay can run more than one dashboard (e.g. an instrument cluster); only the main screen's drives our window
+// CarPlay can run more than one dashboard (e.g. an instrument cluster)
 static BOOL isMainDashboard(id dashboard)
 {
     id mainDashboard = objcInvoke([UIApplication sharedApplication], @"_currentDashboard");
@@ -203,9 +179,7 @@ static BOOL isMainDashboard(id dashboard)
 
 static NSString *const kTrimRequester = @"CarPlayEnable";
 
-/*
-While SpringBoard's home screen covers CarPlay's, CarPlay's own home (wallpaper, widget scenes, app grid) is put to sleep
-*/
+// put CarPlay's own home screen to sleep while SpringBoard's covers it
 static void updateDashboardTrim(id dashboard)
 {
     static BOOL trimmed;
@@ -248,7 +222,6 @@ static void updateDashboardTrim(id dashboard)
             for (UIWindow *window in windows)
             {
                 NSString *name = NSStringFromClass([window class]);
-                // the wallpaper's, and the black fill under everything (-2)
                 if (!window.hidden && ([name hasSuffix:@"DBWallpaperWindow"] || [name hasSuffix:@"DBWallpaperHostWindow"] || ([name isEqualToString:@"UIWindow"] && window.windowLevel < -1)))
                 {
                     window.hidden = YES;
@@ -299,10 +272,7 @@ static void requestCarplayClose(NSString *reason)
 
 %hook FBSApplicationLibrary
 
-/*
-DashBoard's library only loads CarPlay-capable apps, picked by applicationIdentityFilter.
-Widen that filter so forced apps get loaded too.
-*/
+// widen DashBoard's CarPlay-only app filter so forced apps load
 - (id)initWithConfiguration:(id)configuration
 {
     Class infoClass = ((Class (*)(id, SEL))objc_msgSend)(configuration, NSSelectorFromString(@"applicationInfoClass"));
@@ -326,7 +296,6 @@ Widen that filter so forced apps get loaded too.
 
 %end
 
-// SpringBoard is a "Hidden" type app, which CarPlay's home screen leaves out
 %hook DBApplicationInfo
 
 - (BOOL)isHidden
@@ -336,7 +305,6 @@ Widen that filter so forced apps get loaded too.
 
 %end
 
-// CarPlay's icon model, for the car's own icon (not retained: CarPlay keeps it)
 static id currentDBIconModel;
 
 %hook DBIconModel
@@ -352,10 +320,7 @@ static id currentDBIconModel;
 
 %hook DBApplicationController
 
-/*
-Called for every app DashBoard loads, at startup and on install/update. The DBApplication made from
-this info computes its CarPlay policy from the declaration, so it has to be added first.
-*/
+// the declaration has to be there before DashBoard builds the app's CarPlay policy
 - (void)_loadApplicationWithInfo:(id)appInfo
 {
     addCarplayDeclarationToAppInfo(appInfo);
@@ -366,10 +331,7 @@ this info computes its CarPlay policy from the declaration, so it has to be adde
 
 %hook DBDashboard
 
-/*
-Every launch path (home icons, dock, Siri, URLs) ends up here with a DBApplicationLaunchInfo as the event context.
-Forced apps are handed to SpringBoard instead of DashBoard's workspace.
-*/
+// every launch path ends here; forced apps go to SpringBoard instead
 - (void)_handleOpenApplicationEvent:(id)event
 {
     id launchInfo = objcInvoke(event, @"context");
@@ -382,8 +344,7 @@ Forced apps are handed to SpringBoard instead of DashBoard's workspace.
     }
 
     LOG_LIFECYCLE_EVENT;
-    // close a native CarPlay app that fills the screen, so ours sits over CarPlay's home screen. Not when CarPlay is
-    // already home: its dashboard widgets count as foreground scenes, and home there flips dashboard and app grid
+    // close a full screen native CarPlay app first. Not when already home: widgets count as foreground there and home flips the pages
     id baseEntity = workspaceBaseEntity(objcInvoke(objcInvoke(self, @"workspace"), @"state"));
     if (baseEntity && !entityIsHomescreen(baseEntity))
     {
@@ -397,15 +358,10 @@ Forced apps are handed to SpringBoard instead of DashBoard's workspace.
     requestCarplayLaunch(objcInvoke(application, @"bundleIdentifier"));
 }
 
-/*
-CarPlay's home button (the sidebar's, or the car's own). While one of our apps is up it closes that app and leaves
-CarPlay on whichever home page it was showing, like it does for its own apps.
-*/
 - (void)_handleHomeEvent:(id)event
 {
     id context = [event respondsToSelector:NSSelectorFromString(@"context")] ? objcInvoke(event, @"context") : nil;
-    // in SpringBoard mode a second press soon after the first opens the car app switcher, like a home button's
-    // double click. The first press waits for it, so the app stays open under the switcher
+    // in SpringBoard mode a quick second press opens the car app switcher, so the first one waits for it
     static CFTimeInterval lastHomePress;
     static NSUInteger homePressGeneration;
     static BOOL replayingHomePress;
@@ -441,10 +397,7 @@ CarPlay on whichever home page it was showing, like it does for its own apps.
     %orig;
 }
 
-/*
-Every switch of what fills CarPlay's app area: another app (sidebar, home screen, dashboard widget, call, alert, Siri
-opening something) closes ours. Going home doesn't need to, ours already sits over the home screen.
-*/
+// anything else taking CarPlay's app area closes ours (going home doesn't need to)
 - (void)workspace:(id)workspace stateDidChangeFromState:(id)fromState toState:(id)toState
 {
     %orig;
@@ -456,7 +409,6 @@ opening something) closes ours. Going home doesn't need to, ours already sits ov
     updateDashboardTrim(self);
     id fromEntity = workspaceBaseEntity(fromState);
     id toEntity = workspaceBaseEntity(toState);
-    // SpringBoard's home screen covers CarPlay's, and makes way for CarPlay's own apps
     if (springBoardModeActive && toEntity && ![toEntity isEqual:fromEntity])
     {
         [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:kCRSpringBoardModeShowNotification object:nil userInfo:@{@"showing": @(entityIsHomescreen(toEntity))}];
@@ -474,14 +426,8 @@ opening something) closes ours. Going home doesn't need to, ours already sits ov
 
 %end
 
-/*
-Carplay dashboard icon appearance
-*/
 %hook SBIconListGridLayoutConfiguration
 
-/*
-Make the CarPlay dashboard show 5 columns of apps instead of 4
-*/
 - (NSUInteger)numberOfPortraitColumns
 {
     NSUInteger columns = %orig;
@@ -492,9 +438,6 @@ Make the CarPlay dashboard show 5 columns of apps instead of 4
     return columns;
 }
 
-/*
-Make the Carplay dashboard icons a little smaller so 5 fit comfortably
-*/
 - (struct SBIconImageInfo)iconImageInfoForGridSizeClass:(id)gridSizeClass
 {
     struct SBIconImageInfo info = %orig;
@@ -507,15 +450,7 @@ Make the Carplay dashboard icons a little smaller so 5 fit comfortably
 
 %end
 
-/*
-App icons on the Carplay dashboard.
-For apps that natively support Carplay, a long press launches them in "full mode". Tapping them
-still opens their normal Carplay UI
-*/
-/*
-While SpringBoard's home screen covers CarPlay's, the car's knob, touchpad or arrow keys can't move onto (and open apps
-from) the hidden one. The sidebar still takes them
-*/
+// the car's knob and arrow keys can't move onto CarPlay's hidden home screen
 %hook DBDashboardHomeViewController
 
 - (BOOL)shouldUpdateFocusInContext:(UIFocusUpdateContext *)context
@@ -567,9 +502,6 @@ from) the hidden one. The sidebar still takes them
 %end
 
 
-/*
-SpringBoard has no icon of its own: draw one, a grid of app icons on a home screen
-*/
 static UIImage *CRSpringBoardIconImage(CGSize size, CGFloat scale, CGFloat cornerRadius)
 {
     if (size.width <= 0 || size.height <= 0)
@@ -662,13 +594,10 @@ static BOOL CRIsSpringBoardIcon(id icon)
 
 %end
 
-/*
-The sidebar's dock: two more recent apps under CarPlay's three (navigation, audio, other), and optionally SpringBoard
-always at the bottom
-*/
+// the sidebar's dock: two more recent apps, and optionally SpringBoard pinned at the bottom
 static char kExtraDockButtonsKey;
 
-// the buttons' container is sized for CarPlay's three: the extra ones hang past it, and it takes their touches too
+// the container is sized for three buttons and has to take the extra ones' touches
 %subclass CRDockContainerView : UIView
 
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event
@@ -711,7 +640,6 @@ static void CRUpdateDockActiveStates(id controller)
     }
 }
 
-// a hold on a sidebar app opens its iPhone app rather than its CarPlay one
 static char kDockLongPressKey;
 
 static void CRAddDockLongPress(id controller, UIView *button)
@@ -778,7 +706,6 @@ static void CRUpdateExtraDockButtons(id controller)
             ((UIView *)button).hidden = !fiveIcons;
         }
 
-        // CarPlay's navigation and audio apps stay; the rest are the most recent apps they don't show
         NSMutableSet *shown = [NSMutableSet set];
         for (NSString *name in @[@"navigationAppButton", @"audioAppButton"])
         {
@@ -816,7 +743,6 @@ static void CRUpdateExtraDockButtons(id controller)
             CRAddDockLongPress(controller, button);
         }
 
-        // CarPlay's "other" slot and the extra ones, top to bottom
         NSMutableArray *slots = [NSMutableArray arrayWithObject:otherButton];
         if (fiveIcons)
         {
@@ -844,9 +770,6 @@ static void CRUpdateExtraDockButtons(id controller)
     }
 }
 
-/*
-The car's own icon (its maker's screens) for SpringBoard mode's home screen: its name and a PNG of it
-*/
 static void CRSendCarIconInfo(void)
 {
     @try
@@ -919,7 +842,6 @@ static void CRSendCarIconInfo(void)
     CRUpdateExtraDockButtons(self);
 }
 
-// CarPlay puts the open app (SpringBoard, in SpringBoard mode) in its slots here too
 - (void)setActiveBundleIdentifier:(NSString *)bundleIdentifier animated:(BOOL)animated
 {
     %orig;
@@ -957,10 +879,7 @@ static void CRSendCarIconInfo(void)
 
 %end
 
-/*
-The app list and icon layout are built once per process. Restart CarPlay (launchd brings it back)
-a moment after the last preference change so toggling several apps only restarts it once.
-*/
+// the app list is built once per process, so restart CarPlay once after a burst of preference changes
 static void scheduleCarplayRestart(void)
 {
     static NSTimer *restartTimer;
@@ -982,7 +901,6 @@ static void scheduleCarplayRestart(void)
     appleAppsWithIcons = [[NSMutableSet alloc] init];
     %init(CARPLAY);
 
-    // SpringBoard says when it opens or closes one of our app windows, whatever asked for it
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:@"com.carplayenable.opened" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         hostedAppShowing = YES;
         updateDashboardTrim(objcInvoke([UIApplication sharedApplication], @"_currentDashboard"));
@@ -995,12 +913,10 @@ static void scheduleCarplayRestart(void)
         springBoardModeActive = [note.userInfo[@"active"] boolValue];
         id dashboard = objcInvoke([UIApplication sharedApplication], @"_currentDashboard");
         updateDashboardTrim(dashboard);
-        // move a highlight off CarPlay's home screen now it's covered
         UIViewController *rootViewController = dashboard ? objcInvoke(dashboard, @"rootViewController") : nil;
         [rootViewController setNeedsFocusUpdate];
         [rootViewController updateFocusIfNeeded];
     }];
-    // SpringBoard mode's long press menu: open an app's own CarPlay UI, the way a tap on CarPlay's home screen does
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:kCRSpringBoardModeOpenNativeNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         id application = objcInvoke_1(objcInvoke(objc_getClass("DBApplicationController"), @"sharedInstance"), @"applicationWithBundleIdentifier:", note.userInfo[@"identifier"]);
         id dashboard = objcInvoke([UIApplication sharedApplication], @"_currentDashboard");
@@ -1010,18 +926,14 @@ static void scheduleCarplayRestart(void)
             return;
         }
         id settings = [[[objc_getClass("DBActivationSettings") alloc] init] autorelease];
-        // 3: launched from the home screen
         objcInvoke_1(settings, @"setLaunchSource:", (unsigned long long)3);
         id launchInfo = objcInvoke_2(objc_getClass("DBApplicationLaunchInfo"), @"launchInfoForApplication:withActivationSettings:", application, settings);
-        // 4: open application
         id event = objcInvoke_2(objc_getClass("DBEvent"), @"eventWithType:context:", (unsigned long long)4, launchInfo);
         objcInvoke_1(dashboard, @"handleEvent:", event);
     }];
-    // a window left over from before this process started (CarPlay restarted) would never be closed by its home button
+    // a window from before a CarPlay restart would never close
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:@"com.carplayenable.close" object:nil userInfo:nil];
-    // and a CarPlay restart goes back to CarPlay's own home screen
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:kCRSpringBoardModeExitNotification object:nil userInfo:nil];
-    // then back to SpringBoard's, if that's where it was, once CarPlay's layout is known
     __block int restoreTries = 0;
     __block void (^restoreSpringBoardMode)(void) = [^{
         CGRect appFrame = carplayAppFrame();
@@ -1038,7 +950,6 @@ static void scheduleCarplayRestart(void)
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:kCRCarIconRequestNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         CRSendCarIconInfo();
     }];
-    // the car's icon on SpringBoard's home screen: hand the screen to the car's own UI
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:kCRCarIconLaunchNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         id dashboard = objcInvoke([UIApplication sharedApplication], @"_currentDashboard");
         id session = objcInvoke(objcInvoke(dashboard, @"environmentConfiguration"), @"session");

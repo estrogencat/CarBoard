@@ -9,18 +9,15 @@
     {
         [self setTitle:@"CarPlayEnable Preferences"];
         _rootTable = [[UITableView alloc] initWithFrame:[[self view] bounds] style:UITableViewStyleGrouped];
-        // follows the view, which isn't the phone's portrait size on the car
         [_rootTable setAutoresizingMask:UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight];
         [_rootTable setDelegate:self];
         [_rootTable setDataSource:self];
         [[self view] addSubview:_rootTable];
 
-        // The Preference process does not possess the necessary entitlements to fetch installed apps or icon data. Springboard will handle fetching the data - this process
-        // will signal and receive the data via notifications
+        // the prefs process lacks the entitlements for app and icon data, so SpringBoard sends it
         NSOperationQueue *notificationQueue = [[NSOperationQueue alloc] init];
         [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] addObserverForName:PREFERENCES_APP_DATA_NOTIFICATION object:kPrefsAppDataReceiving queue:notificationQueue usingBlock:^(NSNotification * _Nonnull note) {
             NSDictionary *data = [note userInfo];
-            // Create AppList controller
             NSArray *appList = data[@"appList"];
             if (appList)
             {
@@ -30,7 +27,6 @@
             }
         }];
 
-        // Ask Springboard for the app data. This may have a little delay, so its being fetched before the user opens the App List controller
         [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotification:[NSNotification notificationWithName:PREFERENCES_APP_DATA_NOTIFICATION object:kPrefsAppDataRequesting]];
     }
 
@@ -82,7 +78,6 @@
         if (indexPath.row == 0)
         {
             [[cell textLabel] setText:@"Add/Remove Apps"];
-            // cells are reused across sections, drop any switch left on this one
             [cell setAccessoryView:nil];
             [cell setAccessoryType:UITableViewCellAccessoryDisclosureIndicator];
         }
@@ -226,18 +221,14 @@
         {
             if (!_appListController)
             {
-                // Have not received app data from SpringBoard yet..
                 break;
             }
-            // Push to the app list controller
             [[self navigationController] pushViewController:_appListController animated:YES];
             break;
         }
         case 4:
         {
-            // Save the new setting
             [[CRPreferences sharedInstance] updateValue:@(indexPath.row) forPreferenceKey:@"dockAlignment"];
-            // Notify CarPlay of the changes
             [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotification:[NSNotification notificationWithName:PREFERENCES_CHANGED_NOTIFICATION object:kPrefsDockAlignmentChanged]];
             break;
         }
@@ -308,9 +299,7 @@ static NSArray<NSNumber *> *CRScaleSteps(void)
 
 - (void)iconLayoutSwitchChanged:(UISwitch *)sender
 {
-    // Save the new setting
     [[CRPreferences sharedInstance] updateValue:@(sender.isOn) forPreferenceKey:@"fiveColumnIconLayout"];
-    // Notify CarPlay of the changes
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotification:[NSNotification notificationWithName:PREFERENCES_CHANGED_NOTIFICATION object:kPrefsIconLayoutChanged]];
 }
 

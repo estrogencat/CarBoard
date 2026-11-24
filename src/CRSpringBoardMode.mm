@@ -13,7 +13,6 @@ void CRRelayoutCarplayKeyboards(void);
 @property (nonatomic, retain) CRCarIconDataSource *carIconDataSource;
 @property (nonatomic, retain) CADisplayLink *clockDisplayLink;
 @property (nonatomic, retain) UIImageView *wallpaperView;
-// the wallpaper again under CarPlay's sidebar, which blurs what's beneath it
 @property (nonatomic, retain) UIWindow *sidebarWallpaperWindow;
 @property (nonatomic, retain) UIImageView *sidebarWallpaperView;
 @property (nonatomic, retain) id libraryViewController;
@@ -27,16 +26,12 @@ void CRRelayoutCarplayKeyboards(void);
 static id CRListContainingIcon(id rootFolder, id icon);
 static BOOL CRIconIsKind(id icon, NSString *selectorName);
 
-/*
-Frosted backgrounds (the dock, folders) in one named group share a single capture of what's behind them. With the
-phone's home screen and the car's both up that capture flips between the two displays and they flicker. The car's get
-a group of their own
-*/
+// frosted backgrounds in one group share a capture, which flickers between the phone and car displays; the car's get their own group
 void CRSeparateMaterialGroups(UIView *view)
 {
     if ([view isKindOfClass:objc_getClass("MTMaterialView")] && [view respondsToSelector:NSSelectorFromString(@"setGroupNameBase:")])
     {
-        // a copy: setting the new name frees the old one
+        // setting the new name frees the old one
         NSString *base = [[objcInvoke(view, @"groupNameBase") copy] autorelease];
         if (base.length && ![base hasPrefix:@"CarPlayEnable."])
         {
@@ -50,26 +45,22 @@ void CRSeparateMaterialGroups(UIView *view)
     }
 }
 
-// height the home screen is laid out at before it's scaled to the car's: 4 rows of icons, page dots and the dock.
-// the size setting changes it (and the rows with it)
+// laid out this tall, then scaled to the car (4 icon rows, page dots, dock); the size setting changes it
 static const CGFloat kCRHomeScreenLayoutHeight = 530;
 static const CGFloat kCRIconRowHeight = 86;
 static CGFloat CRHomeScreenLayoutHeight(void)
 {
     return round(kCRHomeScreenLayoutHeight / [[CRPreferences sharedInstance] homeScreenScale]);
 }
-// room under the icon rows for the page dots and the dock (116)
 static const CGFloat kCRHomeScreenTopInset = 20;
 static const CGFloat kCRHomeScreenBottomInset = 166;
-// the phone's dock: an icon every 95 points, room at the ends for the dock's rounded edges
 static const CGFloat kCRDockIconPitch = 95;
 static const CGFloat kCRDockSideInset = 30;
 
 static NSString *const kCRDashBoardIconIdentifier = @"com.carplayenable.dashboard";
 static NSString *const kCRCarIconIdentifier = @"com.carplayenable.car";
-// custom icons put on the home screen once: after that, one that's gone was taken off by the user
+// custom icons are placed once; one that's gone later was removed by the user
 static NSString *const kCRPlacedIconsPath = @"/var/mobile/Library/SpringBoard/CarPlayEnablePlacedIcons.plist";
-// the car's icon and name, saved for when CarPlay hasn't sent them yet
 static NSString *const kCRCarIconInfoPath = @"/var/mobile/Library/SpringBoard/CarPlayEnableCarIcon.plist";
 static NSString *const kCROpenCarPlayUIShortcutType = @"com.carplayenable.opencarplayui";
 
@@ -79,10 +70,7 @@ struct CRIconImageInfo {
     double continuousCornerRadius;
 };
 
-/*
-Icons on the car home screen that aren't phone apps: CarPlay's own (back to its home screen) and the car's (its own
-screens). They come off the home screen like Apple's apps that can't be deleted, into the App Library
-*/
+// CarPlay's and the car's icons; they leave the home screen like undeletable Apple apps, into the App Library
 @interface CRCarIconDataSource : NSObject
 @property (nonatomic, copy) NSString *identifier;
 @property (nonatomic, copy) NSString *displayName;
@@ -121,7 +109,7 @@ screens). They come off the home screen like Apple's apps that can't be deleted,
     return self.displayName;
 }
 
-// the plain image: SpringBoard makes the dark and tinted looks from it, like for any app without its own
+// SpringBoard makes the dark and tinted looks from the plain image
 - (id)icon:(id)icon imageWithInfo:(struct CRIconImageInfo)info
 {
     return self.image;
@@ -137,7 +125,6 @@ screens). They come off the home screen like Apple's apps that can't be deleted,
     return YES;
 }
 
-// "Remove App" then only offers taking it off the home screen (see iconManager:wantsUninstallForIcon:location:)
 - (BOOL)iconSupportsUninstall:(id)icon
 {
     return YES;
@@ -154,16 +141,12 @@ screens). They come off the home screen like Apple's apps that can't be deleted,
 @end
 
 
-// the car home screen's own layout, started from a copy of the phone's
-// the phone's home screen lists' (icons stay where they're put, gaps and all)
 static const long long kCRFixedIconLocationBehavior = 4;
 
-// the App Library's category pods: size and gap on the phone, the room kept at the car library's sides
 static const CGFloat kCRLibraryPodSize = 169;
 static const CGFloat kCRLibraryPodGap = 26;
 static const CGFloat kCRLibrarySideInset = 40;
 
-// the phone's icon column pitch and icon width (an XR's small widget is 169pt, medium 360pt)
 static const CGFloat kCRPhoneColumnPitch = 95.5;
 static const CGFloat kCRIconWidth = 60;
 static const CGFloat kCRHomeScreenMinSideInset = 30;
@@ -192,7 +175,6 @@ static id CRCarIconStore(id phoneStore)
     NSUInteger _rootColumns;
     NSUInteger _rootRows;
     CGFloat _libraryListWidth;
-    // not retained: only compared against
     id _carIconModel;
     id _carIconManager;
     UIView *_dragSnapshot;
@@ -200,22 +182,18 @@ static id CRCarIconStore(id phoneStore)
     id _dragIcon;
     CGPoint _dragOffset;
     CFTimeInterval _dragEdgeSince;
-    // held outside edit mode: becomes a drag (and edit mode) once the finger moves
     UIView *_pendingDragIconView;
     CGPoint _pendingDragStart;
     UILongPressGestureRecognizer *_editGesture;
     UITapGestureRecognizer *_endEditGesture;
     UILongPressGestureRecognizer *_dragGesture;
     UISwipeGestureRecognizer *_closeEditorSwipe;
-    // a folder drop: the icon under the finger (raised once held there) and when the finger got there
     UIView *_folderTargetView;
     UIView *_folderCandidateView;
     CFTimeInterval _folderCandidateSince;
-    // the spot the finger is settling on, the icon moves there once it stays
     UIView *_hoverListView;
     unsigned long long _hoverIndex;
     CFTimeInterval _hoverSince;
-    // the drag came from the App Library (the icon may not be on a page yet)
     BOOL _dragFromLibrary;
 }
 
@@ -250,7 +228,6 @@ static id CRCarplayDisplayConfiguration(void)
     [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:kCRSpringBoardModeStateNotification object:nil userInfo:@{@"active": @(_active)}];
 }
 
-// whether it's on, kept over CarPlay restarts
 static NSString *const kCRSpringBoardModeOnPath = @"/var/mobile/Library/SpringBoard/CarPlayEnableSpringBoardMode.plist";
 
 static void CRRememberSpringBoardMode(BOOL on)
@@ -300,15 +277,14 @@ static void CRRememberSpringBoardMode(BOOL on)
         frame = CGRectMake(CARPLAY_SIDEBAR_WIDTH, 0, displayBounds.size.width - CARPLAY_SIDEBAR_WIDTH, displayBounds.size.height);
     }
     window.frame = frame;
-    // over CarPlay's home screen (0), under our app windows (1) and CarPlay's sidebar host, banners and Siri (5+)
+    // over CarPlay's home screen (0), under our app windows (1) and CarPlay's sidebar, banners and Siri (5+)
     window.windowLevel = 0.5;
     window.backgroundColor = [UIColor blackColor];
     window.layer.masksToBounds = YES;
 
     UIViewController *rootViewController = [[[UIViewController alloc] init] autorelease];
     rootViewController.view.backgroundColor = [UIColor clearColor];
-    // the car screen says CarPlay, where long press menus and bars behave differently: the home screen is a phone's
-    // (on the window too, for sheets it presents like the icon editor)
+    // the car screen has the CarPlay idiom, which changes menus and bars; the home screen should act like a phone's
     for (id traitEnvironment in @[window, rootViewController])
     {
         if ([traitEnvironment respondsToSelector:NSSelectorFromString(@"traitOverrides")])
@@ -318,7 +294,6 @@ static void CRRememberSpringBoardMode(BOOL on)
     }
     window.rootViewController = rootViewController;
 
-    // laid over the whole car screen, so it lines up with the copy under the sidebar
     rootViewController.view.frame = window.bounds;
     UIImageView *wallpaperView = [[[UIImageView alloc] initWithFrame:CGRectOffset(displayBounds, -frame.origin.x, -frame.origin.y)] autorelease];
     wallpaperView.contentMode = UIViewContentModeScaleAspectFill;
@@ -328,7 +303,6 @@ static void CRRememberSpringBoardMode(BOOL on)
 
     UIWindow *sidebarWallpaperWindow = [objcInvoke_1([objc_getClass("UIRootSceneWindow") alloc], @"initWithDisplayConfiguration:", displayConfiguration) autorelease];
     sidebarWallpaperWindow.frame = displayBounds;
-    // under all of CarPlay's windows (its wallpaper's are -1 and 0)
     sidebarWallpaperWindow.windowLevel = -1.5;
     sidebarWallpaperWindow.userInteractionEnabled = NO;
     UIImageView *sidebarWallpaperView = [[[UIImageView alloc] initWithFrame:sidebarWallpaperWindow.bounds] autorelease];
@@ -338,16 +312,15 @@ static void CRRememberSpringBoardMode(BOOL on)
     self.sidebarWallpaperWindow = sidebarWallpaperWindow;
     self.sidebarWallpaperView = sidebarWallpaperView;
 
-    // a model of its own (an icon manager takes over its model's delegate) on its own copy of the layout
+    // an icon manager takes over its model's delegate, so the car needs its own model
     id iconController = objcInvoke(objc_getClass("SBIconController"), @"sharedInstance");
     id phoneModel = objcInvoke(iconController, @"model");
     id store = CRCarIconStore(objcInvoke(phoneModel, @"store"));
     [[CRPreferences sharedInstance] reloadPreferences];
     CGFloat layoutHeight = CRHomeScreenLayoutHeight();
     NSUInteger rows = MAX(2, (NSUInteger)floor((layoutHeight - kCRHomeScreenTopInset - kCRHomeScreenBottomInset) / kCRIconRowHeight));
-    // as many dock icons as fit across the car screen (laid out layoutHeight tall, then scaled)
     CGFloat layoutWidth = frame.size.width * layoutHeight / frame.size.height;
-    // columns at the phone's pitch, so widgets (phone sized) line up with the icons around them
+    // the phone's column pitch, so phone-sized widgets line up with the icons
     NSUInteger columns = MAX(4, (NSUInteger)floor((layoutWidth - 2 * kCRHomeScreenMinSideInset - kCRIconWidth) / kCRPhoneColumnPitch) + 1);
     CGFloat sideInset = (layoutWidth - (columns - 1) * kCRPhoneColumnPitch - kCRIconWidth) / 2;
     _rootColumns = columns;
@@ -357,12 +330,10 @@ static void CRRememberSpringBoardMode(BOOL on)
     _carIconModel = model;
     assertGotExpectedObject(model, @"SBIconModel");
 
-    // the phone's home screen layout. SpringBoard's own provider hands out StandBy's layout in landscape
+    // SpringBoard's own provider gives StandBy's layout in landscape
     Class providerClass = objc_getClass("SBHDefaultIconListLayoutProvider");
     unsigned long long screenType = ((unsigned long long (*)(id, SEL))objc_msgSend)(providerClass, NSSelectorFromString(@"currentDeviceScreenType"));
     id listLayoutProvider = [objcInvoke_1([providerClass alloc], @"initWithScreenType:", screenType) autorelease];
-    // pages, and pages with widgets (a layout of their own). They lay out upright (rotated layouts drop free placement's
-    // gaps), so both orientations get the car's grid
     UIEdgeInsets rootInsets = UIEdgeInsetsMake(kCRHomeScreenTopInset, sideInset, kCRHomeScreenBottomInset, sideInset);
     for (NSString *location in @[@"SBIconLocationRoot", @"SBIconLocationRootWithWidgets"])
     {
@@ -376,7 +347,6 @@ static void CRRememberSpringBoardMode(BOOL on)
     }
     CRLog(@"sbmode: %lu columns, side inset %.1f in %.0f", (unsigned long)columns, sideInset, layoutWidth);
 
-    // the App Library's pods (2x2 cells each): as many across as fit the car's width
     _libraryListWidth = layoutWidth - 2 * kCRLibrarySideInset;
     NSUInteger pods = MAX(2, (NSUInteger)floor((_libraryListWidth - 64 + kCRLibraryPodGap) / (kCRLibraryPodSize + kCRLibraryPodGap)));
     id libraryGrid = objcInvoke(objcInvoke_1(listLayoutProvider, @"layoutForIconLocation:", @"SBIconLocationAppLibrary"), @"layoutConfiguration");
@@ -389,7 +359,6 @@ static void CRRememberSpringBoardMode(BOOL on)
     objcInvoke_1(dockGrid, @"setNumberOfPortraitColumns:", (unsigned long long)_dockIconCount);
     objcInvoke_1(dockGrid, @"setNumberOfLandscapeColumns:", (unsigned long long)_dockIconCount);
     CRLog(@"sbmode: dock of %lu for a %.0f wide layout: %@", (unsigned long)_dockIconCount, layoutWidth, dockGrid);
-    // icon spacing comes from the phone's dock width unless told otherwise
     CGSize spacingSize = ((CGSize (*)(id, SEL))objc_msgSend)(dockGrid, NSSelectorFromString(@"listSizeForIconSpacingCalculation"));
     ((void (*)(id, SEL, CGSize))objc_msgSend)(dockGrid, NSSelectorFromString(@"setListSizeForIconSpacingCalculation:"), CGSizeMake(layoutWidth, spacingSize.height));
     CRLog(@"sbmode: dock spacing size %@ -> %.0f wide", NSStringFromCGSize(spacingSize), layoutWidth);
@@ -398,11 +367,9 @@ static void CRRememberSpringBoardMode(BOOL on)
     _carIconManager = manager;
     objcInvoke_1(manager, @"setListLayoutProvider:", listLayoutProvider);
     objcInvoke_1(manager, @"setDelegate:", self);
-    // the Edit button in edit mode: Add Widget, Customize (the icon look) and Edit Pages
     ((void (*)(id, SEL, BOOL))objc_msgSend)(manager, NSSelectorFromString(@"setShowsAddWidgetButtonWhileEditing:"), YES);
-    // the phone's model is told which app tags to show and hide, copy that
     objcInvoke_2(model, @"setVisibilityOfIconsWithVisibleTags:hiddenTags:", objcInvoke(phoneModel, @"visibleIconTags"), objcInvoke(phoneModel, @"hiddenIconTags"));
-    // ours aren't apps: the saved layout drops icons the model doesn't have yet
+    // ours aren't apps, and the saved layout drops icons the model doesn't have yet
     [self registerCustomIconsInModel:model];
     ((void (*)(id, SEL))objc_msgSend)(model, NSSelectorFromString(@"reloadIcons"));
     objcInvoke_1(manager, @"setIconModel:", model);
@@ -412,17 +379,15 @@ static void CRRememberSpringBoardMode(BOOL on)
     }
     [self addDashBoardIconToModel:model rootFolder:objcInvoke(manager, @"rootFolder")];
     ((void (*)(id, SEL, long long))objc_msgSend)(objcInvoke(manager, @"rootFolder"), NSSelectorFromString(@"setListsFixedIconLocationBehavior:"), kCRFixedIconLocationBehavior);
-    // the dock stays in order
     ((void (*)(id, SEL, long long))objc_msgSend)(objcInvoke(objcInvoke(manager, @"rootFolder"), @"dock"), NSSelectorFromString(@"setFixedIconLocationBehavior:"), 0);
 
-    // the manager makes its own root view controller (the root folder's), like CarPlay's home screen embeds it
     UIViewController *rootFolderController = objcInvoke(manager, @"rootFolderController");
     UIViewController *homeViewController = objcInvoke(manager, @"rootViewController") ?: rootFolderController;
     CRLog(@"sbmode: model %@ root folder %@ controller %@ root %@ parent %@", model, objcInvoke(model, @"rootFolder"), rootFolderController, homeViewController, homeViewController.parentViewController);
     assertGotExpectedObject(homeViewController, @"UIViewController");
     if (!homeViewController.parentViewController)
     {
-        // phone-sized icons, widgets and dock don't fit the car's height: lay out taller and scale down to fit
+        // phone-sized icons don't fit the car's height: lay out taller and scale down
         CGFloat scale = frame.size.height / layoutHeight;
         UIView *scaledView = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, frame.size.width / scale, layoutHeight)] autorelease];
         scaledView.transform = CGAffineTransformMakeScale(scale, scale);
@@ -437,7 +402,7 @@ static void CRRememberSpringBoardMode(BOOL on)
         [scaledView addGestureRecognizer:dragGesture];
         _dragGesture = dragGesture;
 
-        // the icon editor fills the car screen and its own swipe down doesn't close it here
+        // the icon editor's own swipe down doesn't close it here
         UISwipeGestureRecognizer *closeEditorSwipe = [[[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(handleCloseEditorSwipe:)] autorelease];
         closeEditorSwipe.direction = UISwipeGestureRecognizerDirectionDown;
         closeEditorSwipe.cancelsTouchesInView = NO;
@@ -445,7 +410,6 @@ static void CRRememberSpringBoardMode(BOOL on)
         [window addGestureRecognizer:closeEditorSwipe];
         _closeEditorSwipe = closeEditorSwipe;
 
-        // a hold on an empty spot starts edit mode, like the phone's
         UILongPressGestureRecognizer *editGesture = [[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleEditHold:)] autorelease];
         editGesture.minimumPressDuration = 0.6;
         editGesture.allowableMovement = 10;
@@ -453,7 +417,6 @@ static void CRRememberSpringBoardMode(BOOL on)
         [scaledView addGestureRecognizer:editGesture];
         _editGesture = editGesture;
 
-        // and a tap on one ends it
         UITapGestureRecognizer *endEditGesture = [[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleEndEditTap:)] autorelease];
         endEditGesture.cancelsTouchesInView = NO;
         endEditGesture.delegate = self;
@@ -470,7 +433,6 @@ static void CRRememberSpringBoardMode(BOOL on)
     }
 
     self.window = window;
-    // ones made before the window was known here (the dock's)
     dispatch_async(dispatch_get_main_queue(), ^{
         CRSeparateMaterialGroups(window);
     });
@@ -479,7 +441,6 @@ static void CRRememberSpringBoardMode(BOOL on)
     CRLog(@"sbmode: home screen on display %@ at %@", objcInvoke(displayConfiguration, @"identity"), NSStringFromCGRect(frame));
 }
 
-// the App Library past the last page, sorted the way the phone's is
 - (void)addLibraryToIconManager:(id)manager iconController:(id)iconController
 {
     @try
@@ -490,7 +451,6 @@ static void CRRememberSpringBoardMode(BOOL on)
         id phoneManager = objcInvoke(iconController, @"iconManager");
         id phoneLibrary = objcInvoke(phoneManager, @"overlayLibraryViewController") ?: objcInvoke(phoneManager, @"trailingLibraryViewController");
         objcInvoke_1(library, @"setIconModel:", self.iconModel ?: objcInvoke(manager, @"iconModel"));
-        // the car's own layouts: its library is wider than the phone's (see CRLibraryListWidth)
         objcInvoke_1(library, @"setListLayoutProvider:", objcInvoke(phoneLibrary, @"listLayoutProvider") ?: objcInvoke(manager, @"listLayoutProvider"));
         objcInvoke_1(library, @"setIconViewProvider:", manager);
         objcInvoke_1(library, @"setIconViewDelegate:", manager);
@@ -504,7 +464,7 @@ static void CRRememberSpringBoardMode(BOOL on)
         ((void (*)(id, SEL, BOOL))objc_msgSend)(library, NSSelectorFromString(@"setAllowsBadging:"), YES);
         objcInvoke_1(manager, @"setTrailingCustomViewController:", library);
         self.libraryViewController = library;
-        // it took the map while being made, before it was known to be the car's: again, with ours in it
+        // it took the category map before it was known to be the car's
         id categoryMap = objcInvoke(categoryMapProvider, @"libraryCategoryMap");
         if (categoryMap && [library respondsToSelector:NSSelectorFromString(@"_installCategoryMap:")])
         {
@@ -518,7 +478,6 @@ static void CRRememberSpringBoardMode(BOOL on)
     }
 }
 
-// the widget page before the first page, like the phone's
 - (void)addTodayViewToIconManager:(id)manager
 {
     @try
@@ -536,11 +495,7 @@ static void CRRememberSpringBoardMode(BOOL on)
     }
 }
 
-/*
-Spotlight (pull down, or the Search pill under the icons). Spotlight is one scene shared by every place that shows it
-on the phone; the car's own presentable draws it on the car while the scene stays on the phone's display (UIKit gives
-a scene on a CarPlay screen no keyboard)
-*/
+// Spotlight is one shared scene; the car's presentable draws it on the car while the scene stays on the phone's display (UIKit gives a CarPlay screen's scene no keyboard)
 - (void)addSearchToConfiguration:(id)configuration
 {
     @try
@@ -548,7 +503,6 @@ a scene on a CarPlay screen no keyboard)
         if (!self.searchPresenter)
         {
             id iconController = objcInvoke(objc_getClass("SBIconController"), @"sharedInstance");
-            // its own wrapper around the one Spotlight view
             id multiplexer = [objcInvoke_1([objc_getClass("SBHomeScreenSpotlightViewController") alloc], @"initWithDelegate:", iconController) autorelease];
             id presentable = [objcInvoke_1([objc_getClass("SBSpotlightPresentableViewController") alloc], @"initWithSpotlightMultiplexingViewController:", multiplexer) autorelease];
             objcInvoke_1(presentable, @"setDelegate:", iconController);
@@ -578,7 +532,6 @@ a scene on a CarPlay screen no keyboard)
     ((void (*)(id, SEL, BOOL))objc_msgSend)(self.searchPresenter, NSSelectorFromString(@"presentSearchAnimated:"), YES);
 }
 
-// what the phone's presenter delegate (SBIconController) does for its own: show the search view and hand it Spotlight
 - (void)activateCarSearch:(BOOL)active
 {
     UIViewController *presentable = self.searchPresentable;
@@ -595,7 +548,6 @@ a scene on a CarPlay screen no keyboard)
     ((void (*)(id, SEL, BOOL))objc_msgSend)(multiplexer, NSSelectorFromString(@"setActiveDelegate:"), active);
     [multiplexer beginAppearanceTransition:active animated:NO];
     [multiplexer endAppearanceTransition];
-    // the scene settings hook turns Spotlight landscape on the car, portrait back on the phone
     id remoteSearch = objcInvoke(objc_getClass("SBSpotlightMultiplexingViewController"), @"sharedRemoteSearchViewController");
     if ([remoteSearch respondsToSelector:NSSelectorFromString(@"updateSceneSettingsWithBlock:")])
     {
@@ -659,7 +611,6 @@ a scene on a CarPlay screen no keyboard)
     return 0;
 }
 
-// the home button on the home screen: to the widget page, and back
 - (void)homeButtonPressed
 {
     if (!_active || !self.window || self.window.hidden || !self.todayViewController)
@@ -719,7 +670,6 @@ a scene on a CarPlay screen no keyboard)
     self.carIconDataSource.image = image;
 }
 
-// CarPlay's own app in the dock (or on the last page if the dock is full), the way back to CarPlay's home screen
 - (void)addDashBoardIconToModel:(id)model rootFolder:(id)rootFolder
 {
     [self makeDashBoardIconDataSource];
@@ -747,7 +697,7 @@ a scene on a CarPlay screen no keyboard)
     }
 }
 
-// where each of ours sits (list -1 is the dock), or that the user took it off the home screen
+// list -1 is the dock
 static NSMutableDictionary *CRCustomIconPositions(void)
 {
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:kCRPlacedIconsPath];
@@ -768,10 +718,7 @@ static NSMutableDictionary *CRCustomIconPositions(void)
     return dataSources;
 }
 
-/*
-SpringBoard's saved layout drops icons that aren't apps when it loads, so ours keep their own: saved after they're
-placed or dragged, put back when the home screen is built
-*/
+// SpringBoard's saved layout drops non-app icons when it loads, so ours keep their own positions
 - (void)saveCustomIconPositions
 {
     id rootFolder = objcInvoke(self.iconManager, @"rootFolder");
@@ -901,8 +848,7 @@ placed or dragged, put back when the home screen is built
     return [identifier isEqualToString:kCRDashBoardIconIdentifier] || [identifier isEqualToString:kCRCarIconIdentifier];
 }
 
-// "Remove App": ours only come off the home screen (into the App Library); apps get the phone's choices
-// folders and widgets: iOS asks on the phone's screen, so ask on the car's
+// iOS asks about folders and widgets on the phone's screen, so ask on the car's
 - (void)confirmRemovalOfContainerIcon:(id)icon
 {
     BOOL folder = [icon respondsToSelector:NSSelectorFromString(@"isFolderIcon")] && ((BOOL (*)(id, SEL))objc_msgSend)(icon, NSSelectorFromString(@"isFolderIcon"));
@@ -984,9 +930,6 @@ placed or dragged, put back when the home screen is built
     }
 }
 
-/*
-The phone's home screen wallpaper is a poster drawn by PosterBoard. SpringBoard keeps a still snapshot of it, use that
-*/
 static UIImage *CRPosterSnapshotInViewController(UIViewController *viewController, NSInteger variant)
 {
     if ([viewController isKindOfClass:objc_getClass("PBUIPosterVariantViewController")] && objcInvokeT(viewController, @"variant", NSInteger) == variant)
@@ -1025,10 +968,7 @@ static UIImage *CRPosterSnapshotInViewController(UIViewController *viewControlle
     }
 }
 
-/*
-The Clock icon's hands tick on a display link of the phone's screen, which stops while that screen is off. Tick them
-from the car's screen too
-*/
+// the Clock icon ticks on the phone screen's display link, which stops while that screen is off
 - (void)setClockTicking:(BOOL)ticking
 {
     if (ticking == (self.clockDisplayLink != nil))
@@ -1097,10 +1037,7 @@ from the car's screen too
     }
 }
 
-/*
-The icon look (light, dark, tinted) reaches icons as traits the phone's home screen gets from SpringBoard. Give the
-car's the same, with the phone idiom
-*/
+// the icon look reaches icons as traits from SpringBoard; give the car's the same, with the phone idiom
 - (void)updateIconStyle
 {
     UIViewController *homeViewController = self.homeViewController;
@@ -1127,8 +1064,7 @@ car's the same, with the phone idiom
         CRLog(@"sbmode: icon style failed: %@", exception);
     }
     [homeViewController.parentViewController setOverrideTraitCollection:[UITraitCollection traitCollectionWithTraitsFromCollections:traits] forChildViewController:homeViewController];
-    // redraw the visible icons for the look, like the icon editor's preview does: icons with no looks of their own
-    // (CarPlay's) only get SpringBoard's made-up dark and tinted ones that way
+    // icons without their own looks (CarPlay's) only get the made-up dark and tinted ones this way
     SEL recache = NSSelectorFromString(@"recacheVisibleIconImageDataForRootIconsInBackgroundWithImageAppearance:cacheOptions:");
     if (configuration && [configuration respondsToSelector:NSSelectorFromString(@"iconImageAppearanceWithUserInterfaceStyle:")] && [_carIconManager respondsToSelector:recache])
     {
@@ -1144,7 +1080,6 @@ car's the same, with the phone idiom
     return object && object == _carIconManager;
 }
 
-// set up before the icon manager (and its views) are
 - (CGFloat)libraryListWidth
 {
     return _libraryListWidth;
@@ -1174,15 +1109,15 @@ car's the same, with the phone idiom
 #pragma mark - CRIconDrag
 
 /*
-Moving icons in edit mode, done here instead of with system drag and drop: hold an icon, drag it over a page or the
-dock (hold it at a side edge to flip pages) and let go
+Icon dragging in edit mode, done here since system drag and drop doesn't work on the car screen: hold an icon, drag
+it over a page or the dock (hold it at a side edge to flip pages) and let go.
 */
 - (BOOL)isEditing
 {
     return self.iconManager && ((BOOL (*)(id, SEL))objc_msgSend)(self.iconManager, NSSelectorFromString(@"isEditing"));
 }
 
-// the lists an icon can be dragged from or dropped on: the dock first (it overlaps the page), then the current page
+// the dock first, since it overlaps the page
 - (NSArray *)dragListViews
 {
     NSMutableArray *listViews = [NSMutableArray array];
@@ -1221,7 +1156,6 @@ dock (hold it at a side edge to flip pages) and let go
     return ((BOOL (*)(id, SEL))objc_msgSend)(self.iconManager, NSSelectorFromString(@"isShowingOrTransitioningToTrailingCustomView"));
 }
 
-// an App Library icon under a point
 - (UIView *)libraryIconViewAtPoint:(CGPoint)point
 {
     UIView *libraryView = [(UIViewController *)self.libraryViewController view];
@@ -1235,14 +1169,12 @@ dock (hold it at a side edge to flip pages) and let go
         if ([view isKindOfClass:objc_getClass("SBIconView")])
         {
             id icon = objcInvoke(view, @"icon");
-            // apps only: not the category folders' mini grids
             return [icon respondsToSelector:NSSelectorFromString(@"applicationBundleID")] && [objcInvoke(icon, @"applicationBundleID") length] ? view : nil;
         }
     }
     return nil;
 }
 
-// what a drag starting at a point would carry
 - (UIView *)dragSourceIconViewAtPoint:(CGPoint)point
 {
     if ([self isShowingLibrary])
@@ -1290,7 +1222,6 @@ dock (hold it at a side edge to flip pages) and let go
     CGPoint point = [gestureRecognizer locationInView:self.scaledView];
     if (gestureRecognizer == _endEditGesture)
     {
-        // not on an icon (or its delete button) or a button like Done
         UIView *hitView = [self.scaledView hitTest:point withEvent:nil];
         for (UIView *view = hitView; view && view != self.scaledView; view = view.superview)
         {
@@ -1309,13 +1240,12 @@ dock (hold it at a side edge to flip pages) and let go
     return iconView != nil;
 }
 
-// in edit mode a hold on an icon is a drag: page swipes, the icon's menu and its own lift wait until it can't be one
+// in edit mode a hold on an icon is a drag, so page swipes and the icon's menu wait for it to fail
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer
 {
     return gestureRecognizer == _dragGesture && [self isEditing] && ([otherGestureRecognizer isKindOfClass:[UIPanGestureRecognizer class]] || [otherGestureRecognizer isKindOfClass:[UILongPressGestureRecognizer class]]);
 }
 
-// outside edit mode the icon's menu opens as usual, the drag only watches for the finger moving off
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer
 {
     if (gestureRecognizer == _closeEditorSwipe)
@@ -1353,7 +1283,7 @@ dock (hold it at a side edge to flip pages) and let go
     if (picker)
     {
         objcInvoke_1(self.iconManager, @"stylePickerViewControllerDidFinish:", picker);
-        // finishing saves the look but leaves the editor up here: put it away like a swipe on its sheet would
+        // finishing leaves the editor up here, so put it away
         UIViewController *sheet = [(UIViewController *)picker navigationController] ?: picker;
         id manager = self.iconManager;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -1393,10 +1323,7 @@ dock (hold it at a side edge to flip pages) and let go
     }
 }
 
-/*
-What follows the finger: an icon view of its own, so its label shadow, folder backdrop and delete button draw like the
-real one's (a snapshot crops to the icon and loses them). A snapshot if one can't be had
-*/
+// an icon view of its own keeps the label shadow, folder backdrop and delete button that a snapshot loses
 - (UIView *)dragViewForIconView:(UIView *)iconView
 {
     UIView *dragView = nil;
@@ -1435,13 +1362,10 @@ real one's (a snapshot crops to the icon and loses them). A snapshot if one can'
     CGPoint center = [iconView convertPoint:CGPointMake(CGRectGetMidX(iconView.bounds), CGRectGetMidY(iconView.bounds)) toView:self.scaledView];
     snapshot.center = center;
     snapshot.userInteractionEnabled = NO;
-    // on top in the home screen's view (it fills scaledView, open folders and the library are inside it), where icons
-    // get the phone's icon look
     [self.homeViewController.view ?: self.scaledView addSubview:snapshot];
     _dragFromLibrary = [self isShowingLibrary];
     if (_dragFromLibrary)
     {
-        // back to the last page to drop it on
         id rootFolderController = objcInvoke(self.iconManager, @"rootFolderController");
         long long lastPage = ((long long (*)(id, SEL))objc_msgSend)(rootFolderController, NSSelectorFromString(@"lastIconPageIndex"));
         ((BOOL (*)(id, SEL, long long, BOOL))objc_msgSend)(rootFolderController, NSSelectorFromString(@"setCurrentPageIndex:animated:"), lastPage, YES);
@@ -1450,8 +1374,6 @@ real one's (a snapshot crops to the icon and loses them). A snapshot if one can'
     _dragIcon = [icon retain];
     _dragOffset = CGPointMake(snapshot.center.x - point.x, snapshot.center.y - point.y);
     _dragEdgeSince = 0;
-    // a library icon stays in the library; one on a page hides while it's carried (from the library too, once a move
-    // finds its view)
     if (!_dragFromLibrary)
     {
         _dragIconView = [iconView retain];
@@ -1493,7 +1415,6 @@ real one's (a snapshot crops to the icon and loses them). A snapshot if one can'
         }
         case UIGestureRecognizerStateChanged:
         {
-            // moved off an icon whose menu is up: drop the menu, start edit mode and carry the icon
             if (_pendingDragIconView && hypot(point.x - _pendingDragStart.x, point.y - _pendingDragStart.y) > 15)
             {
                 UIView *iconView = [_pendingDragIconView autorelease];
@@ -1537,7 +1458,6 @@ real one's (a snapshot crops to the icon and loses them). A snapshot if one can'
     }
 }
 
-// held within reach of a side edge for a moment: the page before or after
 - (void)flipPageIfHeldAtEdge:(CGPoint)point
 {
     id rootFolderController = objcInvoke(self.iconManager, @"rootFolderController");
@@ -1575,7 +1495,6 @@ typedef struct
     long long row;
 } CRIconCoordinate;
 
-// the page or dock list holding an icon
 static id CRListContainingIcon(id rootFolder, id icon)
 {
     id dock = objcInvoke(rootFolder, @"dock");
@@ -1590,7 +1509,6 @@ static id CRListContainingIcon(id rootFolder, id icon)
             return list;
         }
     }
-    // inside a folder on a page or in the dock
     NSMutableArray *lists = [NSMutableArray arrayWithArray:objcInvoke(rootFolder, @"lists") ?: @[]];
     if (dock)
     {
@@ -1616,7 +1534,7 @@ static id CRListContainingIcon(id rootFolder, id icon)
     return nil;
 }
 
-// home screen pages place icons by grid cell (gaps allowed); the dock goes by order
+// pages place icons by grid cell (gaps allowed); the dock goes by order
 static unsigned long long CRGridOptions(UIView *listView)
 {
     return ((unsigned long long (*)(id, SEL))objc_msgSend)(listView, NSSelectorFromString(@"gridCellInfoOptions"));
@@ -1634,7 +1552,6 @@ static BOOL CRIconIsKind(id icon, NSString *selectorName)
     return [icon respondsToSelector:selector] && ((BOOL (*)(id, SEL))objc_msgSend)(icon, selector);
 }
 
-// an app (not a folder or widget) dragged over an app or folder makes or fills a folder
 static BOOL CRCanMakeFolder(id draggedIcon, id targetIcon)
 {
     if (!targetIcon || targetIcon == draggedIcon || CRIconIsKind(draggedIcon, @"isFolderIcon") || CRIconIsKind(draggedIcon, @"isWidgetIcon") || CRIconIsKind(targetIcon, @"isWidgetIcon"))
@@ -1648,7 +1565,6 @@ static BOOL CRCanMakeFolder(id draggedIcon, id targetIcon)
     return [objcInvoke(targetIcon, @"applicationBundleID") length] > 0 && ![objcInvoke(targetIcon, @"applicationBundleID") isEqualToString:kCRDashBoardBundleID];
 }
 
-// a widget dropped on a widget of its size makes or adds to a stack
 static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
 {
     if (!targetIcon || targetIcon == draggedIcon || !CRIconIsKind(draggedIcon, @"isWidgetIcon") || !CRIconIsKind(targetIcon, @"isWidgetIcon"))
@@ -1677,7 +1593,6 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     _folderTargetView = [targetView retain];
 }
 
-// where the dragged icon would go at a point: a list and an index in it
 - (BOOL)insertionAtPoint:(CGPoint)point listView:(UIView **)listViewOut index:(unsigned long long *)indexOut
 {
     UIView *listView = [self dragListViewAtPoint:point];
@@ -1689,7 +1604,7 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     CGPoint listPoint = [listView convertPoint:point fromView:self.scaledView];
     if (CRListUsesGridCells(list))
     {
-        // the cell under the dragged icon's top left icon spot (a widget's first cell, an app's only one)
+        // the cell under the dragged icon's top left (a widget's first cell)
         CGRect frame = [listView convertRect:_dragSnapshot.frame fromView:_dragSnapshot.superview];
         CGPoint cellPoint = CGPointMake(CGRectGetMinX(frame) + kCRIconWidth / 2 + 4, CGRectGetMinY(frame) + kCRIconWidth / 2 + 4);
         CRIconCoordinate cell = ((CRIconCoordinate (*)(id, SEL, CGPoint))objc_msgSend)(listView, NSSelectorFromString(@"coordinateAtPoint:"), cellPoint);
@@ -1706,7 +1621,6 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     return YES;
 }
 
-// moves the dragged icon to a list and index, the icons around it sliding aside
 - (BOOL)moveDraggedIconToListView:(UIView *)targetListView index:(unsigned long long)index
 {
     id rootFolder = objcInvoke(self.iconManager, @"rootFolder");
@@ -1751,8 +1665,6 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
         ((id (*)(id, SEL, id, unsigned long long, unsigned long long))objc_msgSend)(sourceList, NSSelectorFromString(@"insertIcon:atIndex:options:"), _dragIcon, MIN((unsigned long long)sourceIndex, (unsigned long long)[objcInvoke(sourceList, @"icons") count]), 0);
     }
 
-    // the icon's view (a new one if it changed lists) stays hidden under the finger
-    // SpringBoard's own slide (animation type 1, the default one)
     for (UIView *listView in [self dragListViews])
     {
         ((void (*)(id, SEL, long long, unsigned long long))objc_msgSend)(listView, NSSelectorFromString(@"layoutIconsIfNeededWithAnimationType:options:"), 1, 0);
@@ -1785,7 +1697,6 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     _dragIconView.alpha = 0;
 }
 
-// to a grid cell: an empty one keeps it there, a taken one pushes the icons there along
 - (BOOL)moveDraggedIconToGridCell:(unsigned long long)cell ofListView:(UIView *)targetListView fromList:(id)sourceList
 {
     id targetList = objcInvoke(targetListView, @"model");
@@ -1831,11 +1742,9 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     return moved;
 }
 
-// while dragging: over the middle of an app or folder for a moment it's a folder drop, elsewhere the icon makes room
 - (void)hoverDraggedIconAtPoint:(CGPoint)point
 {
     CFTimeInterval now = CACurrentMediaTime();
-    // a raised folder target stays one until the finger leaves it
     if (_folderTargetView && CGRectContainsPoint(_folderTargetView.bounds, [_folderTargetView convertPoint:point fromView:self.scaledView]))
     {
         return;
@@ -1874,7 +1783,6 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     {
         return;
     }
-    // settle on a spot briefly before shuffling icons around
     if (insertionListView != _hoverListView || index != _hoverIndex)
     {
         _hoverListView = insertionListView;
@@ -1882,7 +1790,7 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
         _hoverSince = now;
         return;
     }
-    // over another icon's edge it takes a longer pause to push it aside, so passing over on the way to a folder doesn't
+    // a longer pause over another icon's edge, so passing over on the way to a folder doesn't push it
     if (_hoverSince && now - _hoverSince > (overOtherIcon ? 0.4 : 0.12))
     {
         _hoverSince = 0;
@@ -1990,7 +1898,6 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     UIView *snapshot = _dragSnapshot;
     UIView *iconView = _dragIconView;
     [self.scaledView layoutIfNeeded];
-    // fly to where the icon ended up
     if (!landingView)
     {
         for (UIView *listView in [self dragListViews])
@@ -2055,7 +1962,6 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     return UIInterfaceOrientationMaskLandscape;
 }
 
-// the car screen is landscape: lay pages out 6 wide
 - (BOOL)listsAllowRotatedLayoutForIconManager:(id)manager
 {
     return YES;
@@ -2065,9 +1971,9 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
 {
     objcInvoke_1(configuration, @"setOrientation:", (long long)UIInterfaceOrientationLandscapeRight);
     objcInvoke_1(configuration, @"setAllowedOrientations:", (unsigned long long)UIInterfaceOrientationMaskLandscape);
-    // the phone only shows the Edit button (add widgets, customize, edit pages) in portrait
+    // the phone only shows the Edit button in portrait
     objcInvoke_1(configuration, @"setShowsAddWidgetButtonWhileEditingAllowedOrientations:", (unsigned long long)UIInterfaceOrientationMaskAll);
-    // the root folder only takes its trailing page (the App Library) when it's made
+    // the root folder only takes the App Library page when it's made
     if (!self.libraryViewController)
     {
         [self addLibraryToIconManager:manager iconController:objcInvoke(objc_getClass("SBIconController"), @"sharedInstance")];
@@ -2102,7 +2008,7 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     return YES;
 }
 
-// system drags never get past the lift on the car screen (its drag service only follows the phone's), see CRIconDrag
+// system drags never get past the lift on the car screen
 - (BOOL)iconManagerCanBeginIconDrags:(id)manager
 {
     return NO;
@@ -2128,20 +2034,15 @@ static BOOL CRCanStackWidget(id draggedIcon, id targetIcon)
     return YES;
 }
 
-// widgets keep showing while the phone is locked, like CarPlay's own and StandBy's
 - (BOOL)iconManagerWidgetsCanAppearInSecureEnvironment:(id)manager
 {
     return YES;
 }
 
-// the icon look is the phone's (it's one setting for both), so Customize edits the phone's
-/*
-The add-widget sheet is presented over the whole window, outside the scaled home screen. Lay it out phone-wide and as
-tall as the home screen's space, then scale it down the same way: a card in the middle of the car screen
-*/
+// the add-widget sheet sits outside the scaled home screen: lay it out phone-sized and scale it the same way
 - (void)iconManager:(id)manager prepareAddSheetViewController:(UIViewController *)sheet
 {
-    // landscape makes it compact height, which shrinks its search field into a corner of a tall header
+    // compact height shrinks its search field into a corner
     if ([sheet respondsToSelector:NSSelectorFromString(@"traitOverrides")])
     {
         ((void (*)(id, SEL, NSInteger))objc_msgSend)(objcInvoke(sheet, @"traitOverrides"), NSSelectorFromString(@"setVerticalSizeClass:"), UIUserInterfaceSizeClassRegular);
@@ -2187,7 +2088,7 @@ static void CRRelayoutViews(UIView *view)
     CGFloat layoutHeight = CRHomeScreenLayoutHeight();
     CGFloat scale = window.bounds.size.height / layoutHeight;
     container.transform = CGAffineTransformIdentity;
-    // a phone's width: wider, it switches to a layout whose header fills half the sheet
+    // wider switches to a layout whose header fills half the sheet
     container.bounds = CGRectMake(0, 0, MIN(window.bounds.size.width / scale, [UIScreen mainScreen].bounds.size.width), layoutHeight);
     container.center = CGPointMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds));
     container.transform = CGAffineTransformMakeScale(scale, scale);
@@ -2195,15 +2096,13 @@ static void CRRelayoutViews(UIView *view)
     [container layoutIfNeeded];
     UIEdgeInsets safeArea = sheet.view.safeAreaInsets;
     CRLog(@"sbmode: add sheet scaled %.2f, sheet %@, safe area %@ (window %@, additional %@)", scale, NSStringFromCGRect(sheet.view.frame), NSStringFromUIEdgeInsets(safeArea), NSStringFromUIEdgeInsets(window.safeAreaInsets), NSStringFromUIEdgeInsets(sheet.additionalSafeAreaInsets));
-    // no notch to keep clear of on the car
     if (safeArea.top > 0)
     {
         UIEdgeInsets additional = sheet.additionalSafeAreaInsets;
         additional.top -= safeArea.top;
         sheet.additionalSafeAreaInsets = additional;
     }
-    // parts sized before the resize (the search bar) keep their old size until the sheet works them out again, which it
-    // otherwise only does when the search field gains or loses focus
+    // parts sized before the resize (the search bar) otherwise keep their size until the search field's focus changes
     void (^refit)(void) = ^{
         for (NSString *name in @[@"_updateSearchBarContentInsets", @"_updateHorizontalSpacing", @"_updateCollectionViewInsets", @"_layoutSearchBarGradientMaskLayers"])
         {
@@ -2215,7 +2114,6 @@ static void CRRelayoutViews(UIView *view)
         CRRelayoutViews(sheet.viewIfLoaded);
     };
     refit();
-    // again once the open animation is done, and the search bar with it
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         refit();
         UISearchBar *searchBar = nil;
@@ -2230,7 +2128,6 @@ static void CRRelayoutViews(UIView *view)
             }
             [pending addObjectsFromArray:view.subviews];
         }
-        // it stretches with its container from the width it was made at, which was worked out from the car screen
         if (searchBar.superview && searchBar.frame.size.width != searchBar.superview.bounds.size.width)
         {
             CGRect frame = searchBar.frame;
@@ -2247,7 +2144,7 @@ static void CRRelayoutViews(UIView *view)
     return [iconController respondsToSelector:_cmd] ? objcInvoke_1(iconController, @"iconStylePickerConfigurationForIconManager:", manager) : nil;
 }
 
-// the look picked in the car's icon editor, saved as the phone's (SpringBoard calls this without checking for it)
+// SpringBoard calls this without checking for it
 - (void)updateStyleConfiguration:(id)configuration forIconManager:(id)manager
 {
     id iconController = objcInvoke(objc_getClass("SBIconController"), @"sharedInstance");
@@ -2257,7 +2154,6 @@ static void CRRelayoutViews(UIView *view)
     }
 }
 
-// folder names, from the phone's
 - (NSString *)iconManager:(id)manager localizedFolderNameForDefaultDisplayName:(NSString *)name
 {
     return objcInvoke_2(objcInvoke(objc_getClass("SBIconController"), @"sharedInstance"), @"iconManager:localizedFolderNameForDefaultDisplayName:", manager, name);
@@ -2274,7 +2170,6 @@ static NSString *CRBundleIDForIconView(id iconView)
     return [icon respondsToSelector:NSSelectorFromString(@"applicationBundleID")] ? objcInvoke(icon, @"applicationBundleID") : nil;
 }
 
-// apps with a CarPlay UI of their own carry a CarPlay declaration
 static BOOL CRAppHasCarPlayUI(NSString *bundleID)
 {
     if (!bundleID || [bundleID isEqualToString:kCRDashBoardBundleID])
@@ -2285,7 +2180,6 @@ static BOOL CRAppHasCarPlayUI(NSString *bundleID)
     return app && objcInvoke(objcInvoke(app, @"info"), @"carPlayDeclaration") != nil;
 }
 
-// long press menus: the phone's app shortcuts, plus opening the app's CarPlay UI when it has one
 - (id)iconManager:(id)manager applicationShortcutItemsForIconView:(id)iconView
 {
     NSArray *items = objcInvoke_2(objcInvoke(objc_getClass("SBIconController"), @"sharedInstance"), @"iconManager:applicationShortcutItemsForIconView:", manager, iconView);
@@ -2306,7 +2200,6 @@ static BOOL CRAppHasCarPlayUI(NSString *bundleID)
     return [@[item] arrayByAddingObjectsFromArray:items ?: @[]];
 }
 
-// in the scaled home screen, so the menu lines up with (and is sized like) its icon
 - (UIView *)iconManager:(id)manager containerViewForPresentingContextMenuForIconView:(id)iconView
 {
     return self.scaledView ?: self.window.rootViewController.view;
@@ -2314,7 +2207,6 @@ static BOOL CRAppHasCarPlayUI(NSString *bundleID)
 
 #pragma mark - widget taps
 
-// a widget's tap opens its app (or the app for its link) on the car screen, handed the widget's action
 - (void)launchWidgetApp:(NSString *)bundleID action:(id)action
 {
     CRLog(@"sbmode: widget launch %@ action %@", bundleID, action);
@@ -2324,7 +2216,6 @@ static BOOL CRAppHasCarPlayUI(NSString *bundleID)
     }
 }
 
-// a CHUISWidgetLaunchRequest: the widget's app and its action (a user activity or a link)
 - (void)launchWidgetRequest:(id)launch
 {
     NSString *bundleID = [launch respondsToSelector:NSSelectorFromString(@"effectiveContainerBundleIdentifier")] ? objcInvoke(launch, @"effectiveContainerBundleIdentifier") : nil;
@@ -2366,7 +2257,6 @@ static BOOL CRAppHasCarPlayUI(NSString *bundleID)
     return [iconController respondsToSelector:_cmd] ? objcInvoke_2(iconController, @"iconManager:bundleIdentifierToLaunchForWidgetURL:", manager, url) : nil;
 }
 
-// iOS 18's free placement: icons keep the cell they're dropped in
 - (long long)iconManagerListsFixedIconLocationBehavior:(id)manager
 {
     return kCRFixedIconLocationBehavior;
@@ -2383,14 +2273,13 @@ static BOOL CRAppHasCarPlayUI(NSString *bundleID)
     return [iconController respondsToSelector:_cmd] ? ((BOOL (*)(id, SEL, id, id))objc_msgSend)(iconController, _cmd, manager, bundleID) : YES;
 }
 
-// opens the app on the car screen, then hands it the shortcut
 - (BOOL)iconManager:(id)manager shouldActivateApplicationShortcutItem:(id)item atIndex:(unsigned long long)index forIconView:(id)iconView
 {
     NSString *bundleID = CRBundleIDForIconView(iconView);
     CRLog(@"sbmode: shortcut %@ for %@", item, bundleID);
     if ([objcInvoke(item, @"type") isEqualToString:kCROpenCarPlayUIShortcutType])
     {
-        // CarPlay opens it, which hides this home screen until CarPlay goes home again
+        // CarPlay opens it, which hides this home screen until CarPlay goes home
         [[objc_getClass("NSDistributedNotificationCenter") defaultCenter] postNotificationName:kCRSpringBoardModeOpenNativeNotification object:nil userInfo:@{@"identifier": bundleID}];
         return NO;
     }

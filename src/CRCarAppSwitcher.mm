@@ -9,7 +9,6 @@ static const CGFloat kCRCardLabelHeight = 20;
 static const CGFloat kCRCardLabelGap = 6;
 static const CGFloat kCRCardSpacing = 18;
 static const CGFloat kCRGridMargin = 20;
-// the recent apps and their pictures, kept over CarPlay and SpringBoard restarts
 static NSString *const kCRRecentAppsPath = @"/var/mobile/Library/SpringBoard/CarPlayEnableRecentApps.plist";
 static NSString *const kCRSnapshotsDirectory = @"/var/mobile/Library/Caches/CarPlayEnableSwitcher";
 
@@ -59,7 +58,6 @@ static NSString *CRSnapshotPath(NSString *bundleIdentifier)
             UIImage *snapshot = [UIImage imageWithContentsOfFile:CRSnapshotPath(bundleIdentifier)];
             if (snapshot)
             {
-                // saved at the screen's scale
                 _snapshots[bundleIdentifier] = [UIImage imageWithCGImage:snapshot.CGImage scale:[self carScreenScale] orientation:UIImageOrientationUp];
             }
         }
@@ -86,7 +84,7 @@ static NSString *CRSnapshotPath(NSString *bundleIdentifier)
 
 - (void)forgetApp:(NSString *)bundleIdentifier
 {
-    // often the recents' own entry, which removing it frees
+    // often the recents entry itself, which removing frees
     bundleIdentifier = [[bundleIdentifier retain] autorelease];
     [self.recentIdentifiers removeObject:bundleIdentifier];
     [self.snapshots removeObjectForKey:bundleIdentifier];
@@ -115,7 +113,7 @@ static NSString *CRSnapshotPath(NSString *bundleIdentifier)
 extern "C" void CARenderServerRenderDisplay(kern_return_t port, CFStringRef displayName, IOSurfaceRef surface, int x, int y);
 extern "C" CGImageRef UICreateCGImageFromIOSurface(IOSurfaceRef surface);
 
-// what's on the car screen in rect (display points), other processes' content included
+// includes other processes content
 static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
 {
     NSString *displayName = objcInvoke(getCarplayCADisplay(), @"name");
@@ -192,7 +190,6 @@ static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
         return;
     }
 
-    // the app still open behind gets a fresh picture
     CRCarPlayWindow *liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
     if (liveCarplayWindow && !liveCarplayWindow.isDismissing)
     {
@@ -202,7 +199,7 @@ static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
     CGRect frame = homeWindow.frame;
     UIWindow *window = [objcInvoke_1([objc_getClass("UIRootSceneWindow") alloc], @"initWithDisplayConfiguration:", displayConfiguration) autorelease];
     window.frame = frame;
-    // over our app windows (1), under CarPlay's banners (7)
+    // over our app windows (1), under CarPlay banners (7)
     window.windowLevel = 2;
     window.backgroundColor = [UIColor blackColor];
     window.layer.masksToBounds = YES;
@@ -211,7 +208,6 @@ static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
     UIView *root = rootViewController.view;
     root.frame = window.bounds;
 
-    // what's behind, blurred
     UIImageView *backdrop = [[[UIImageView alloc] initWithFrame:root.bounds] autorelease];
     backdrop.image = CRSnapshotScreen(homeWindow.screen, frame);
     [root addSubview:backdrop];
@@ -229,7 +225,6 @@ static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
     backgroundTap.delegate = self;
     [scrollView addGestureRecognizer:backgroundTap];
 
-    // apps deleted since
     id applicationController = objcInvoke(objc_getClass("SBApplicationController"), @"sharedInstance");
     for (NSString *bundleIdentifier in [[self.recentIdentifiers copy] autorelease])
     {
@@ -297,7 +292,6 @@ static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
 - (CGSize)cardSize
 {
     CGSize bounds = self.scrollView.bounds.size;
-    // two rows of cards shaped like the app area, each under its icon and name
     CGFloat height = floor((bounds.height - 2 * kCRGridMargin - kCRCardSpacing - 2 * (kCRCardLabelHeight + kCRCardLabelGap)) / 2);
     CGFloat width = floor(height * bounds.width / MAX(bounds.height, 1));
     return CGSizeMake(width, height);
@@ -347,7 +341,6 @@ static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
     NSUInteger columns = (self.cards.count + 1) / 2;
     CGFloat contentWidth = 2 * kCRGridMargin + columns * size.width + (columns ? columns - 1 : 0) * kCRCardSpacing;
     CGFloat boundsWidth = self.scrollView.bounds.size.width;
-    // few enough to fit: centred, like the iPad's
     CGFloat originX = contentWidth < boundsWidth ? (boundsWidth - contentWidth) / 2 + kCRGridMargin : kCRGridMargin;
     void (^layout)(void) = ^{
         [self.cards enumerateObjectsUsingBlock:^(UIView *card, NSUInteger index, BOOL *stop) {
@@ -380,7 +373,6 @@ static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
     }
 }
 
-// swipe a card up to quit its app
 - (void)handleCardPan:(UIPanGestureRecognizer *)gesture
 {
     UIView *card = gesture.view;
@@ -451,7 +443,6 @@ static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
 {
     if ([gesture isKindOfClass:[UIPanGestureRecognizer class]])
     {
-        // up, not across (the grid scrolls across)
         CGPoint velocity = [(UIPanGestureRecognizer *)gesture velocityInView:gesture.view];
         return velocity.y < 0 && fabs(velocity.y) > fabs(velocity.x);
     }
@@ -460,7 +451,6 @@ static UIImage *CRSnapshotScreen(UIScreen *screen, CGRect rect)
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gesture shouldReceiveTouch:(UITouch *)touch
 {
-    // the background tap only takes taps off the cards
     if (gesture.view == self.scrollView && [gesture isKindOfClass:[UITapGestureRecognizer class]])
     {
         for (UIView *card in self.cards)
