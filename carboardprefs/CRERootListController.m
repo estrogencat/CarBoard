@@ -1,6 +1,64 @@
 #include "CRERootListController.h"
 #include "../src/common.h"
 
+@interface UIImage (CRIcons)
++ (UIImage *)_applicationIconImageForBundleIdentifier:(NSString *)bundleIdentifier format:(int)format scale:(CGFloat)scale;
+@end
+
+// a Settings-style row icon: a white symbol on a colored rounded square
+static UIImage *CRRowIcon(NSString *symbolName, UIColor *color)
+{
+    CGSize size = CGSizeMake(29, 29);
+    UIImage *symbol = [[UIImage systemImageNamed:symbolName withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightMedium]] imageWithTintColor:[UIColor whiteColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        [color setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size.width, size.height) cornerRadius:7] fill];
+        CGSize symbolSize = symbol.size;
+        [symbol drawInRect:CGRectMake((size.width - symbolSize.width) / 2, (size.height - symbolSize.height) / 2, symbolSize.width, symbolSize.height)];
+    }];
+}
+
+// the page's header card: icon, name and what it does, like the system's own settings pages
+static UITableViewCell *CRHeaderCell(void)
+{
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+
+    // the system's placeholder for an app without an icon, until CarBoard has one
+    UIImage *icon = [UIImage _applicationIconImageForBundleIdentifier:@"com.estrogencat.carboard.noicon" format:2 scale:[UIScreen mainScreen].scale];
+    UIImageView *iconView = [[UIImageView alloc] initWithImage:icon];
+    iconView.contentMode = UIViewContentModeScaleAspectFit;
+
+    UILabel *titleLabel = [[UILabel alloc] init];
+    titleLabel.text = @"CarBoard";
+    titleLabel.font = [UIFont systemFontOfSize:30 weight:UIFontWeightBold];
+    titleLabel.textAlignment = NSTextAlignmentCenter;
+
+    UILabel *descriptionLabel = [[UILabel alloc] init];
+    descriptionLabel.text = @"Use any app on CarPlay, or swap CarPlay's home screen for your iPhone's, with your widgets, App Library and search.";
+    descriptionLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    descriptionLabel.textAlignment = NSTextAlignmentCenter;
+    descriptionLabel.numberOfLines = 0;
+
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[iconView, titleLabel, descriptionLabel]];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.alignment = UIStackViewAlignmentCenter;
+    stack.spacing = 6;
+    [stack setCustomSpacing:12 afterView:iconView];
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [cell.contentView addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [iconView.widthAnchor constraintEqualToConstant:60],
+        [iconView.heightAnchor constraintEqualToConstant:60],
+        [stack.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:22],
+        [stack.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-22],
+        [stack.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:20],
+        [stack.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-20],
+    ]];
+    return cell;
+}
+
 @implementation CRERootListController
 
 - (id)initForContentSize:(CGSize)size
@@ -8,7 +66,7 @@
     if ((self = [super init]))
     {
         [self setTitle:@"CarBoard"];
-        _rootTable = [[UITableView alloc] initWithFrame:[[self view] bounds] style:UITableViewStyleGrouped];
+        _rootTable = [[UITableView alloc] initWithFrame:[[self view] bounds] style:UITableViewStyleInsetGrouped];
         [_rootTable setAutoresizingMask:UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight];
         [_rootTable setDelegate:self];
         [_rootTable setDataSource:self];
@@ -40,12 +98,17 @@
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
-    return 6;
+    return 7;
 }
 
+// section 0 is the header card, the settings follow
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
-    switch (section)
+    if (section == 0)
+    {
+        return 1;
+    }
+    switch (section - 1)
     {
         case 0:
             return 1;
@@ -67,6 +130,11 @@
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
+    if (indexPath.section == 0)
+    {
+        return CRHeaderCell();
+    }
+    indexPath = [NSIndexPath indexPathForRow:indexPath.row inSection:indexPath.section - 1];
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"com.estrogencat.carboard.cell"];
     if (cell == nil)
     {
@@ -78,6 +146,7 @@
         if (indexPath.row == 0)
         {
             [[cell textLabel] setText:@"Add/Remove Apps"];
+            cell.imageView.image = CRRowIcon(@"square.grid.2x2.fill", [UIColor systemBlueColor]);
             [cell setAccessoryView:nil];
             [cell setAccessoryType:UITableViewCellAccessoryDisclosureIndicator];
         }
@@ -85,6 +154,7 @@
     else if (indexPath.section == 1)
     {
         [[cell textLabel] setText:@"Native CarPlay Look"];
+        cell.imageView.image = CRRowIcon(@"car.fill", [UIColor systemGreenColor]);
         UISwitch *cellSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
         [cellSwitch setOn:[[CRPreferences sharedInstance] nativeCarplayLook] animated:NO];
         [cellSwitch addTarget:self action:@selector(nativeLookSwitchChanged:) forControlEvents:UIControlEventValueChanged];
@@ -94,6 +164,7 @@
     else if (indexPath.section == 2 && indexPath.row == 0)
     {
         [[cell textLabel] setText:@"Size %"];
+        cell.imageView.image = CRRowIcon(@"arrow.up.left.and.arrow.down.right", [UIColor systemGrayColor]);
         [cell setAccessoryView:[self scaleControlForKey:@"appScale" value:[[CRPreferences sharedInstance] appScale]]];
         [cell setAccessoryType:UITableViewCellAccessoryNone];
     }
@@ -101,6 +172,7 @@
     {
         BOOL promptsRow = indexPath.row == 2;
         [[cell textLabel] setText:promptsRow ? @"Permission Prompts on Car" : @"iPad Layout"];
+        cell.imageView.image = promptsRow ? CRRowIcon(@"exclamationmark.bubble.fill", [UIColor systemOrangeColor]) : CRRowIcon(@"ipad.landscape", [UIColor systemIndigoColor]);
         UISwitch *cellSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
         [cellSwitch setOn:promptsRow ? [[CRPreferences sharedInstance] alertsOnCar] : [[CRPreferences sharedInstance] iPadAppLayout] animated:NO];
         [cellSwitch addTarget:self action:promptsRow ? @selector(alertsOnCarSwitchChanged:) : @selector(iPadLayoutSwitchChanged:) forControlEvents:UIControlEventValueChanged];
@@ -110,11 +182,13 @@
     else if (indexPath.section == 3)
     {
         [[cell textLabel] setText:@"Size %"];
+        cell.imageView.image = CRRowIcon(@"apps.iphone", [UIColor systemPinkColor]);
         [cell setAccessoryView:[self scaleControlForKey:@"homeScreenScale" value:[[CRPreferences sharedInstance] homeScreenScale]]];
         [cell setAccessoryType:UITableViewCellAccessoryNone];
     }
     else if (indexPath.section == 4)
     {
+        cell.imageView.image = nil;
         [cell setAccessoryView:nil];
         if (indexPath.row == 0)
         {
@@ -144,6 +218,7 @@
         if (indexPath.row == 0)
         {
             [[cell textLabel] setText:@"5 Columns"];
+            cell.imageView.image = CRRowIcon(@"square.grid.3x3.fill", [UIColor systemTealColor]);
             UISwitch *cellSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
             [cellSwitch setOn:[[CRPreferences sharedInstance] fiveColumnIconLayout] animated:NO];
             [cellSwitch addTarget:self action:@selector(iconLayoutSwitchChanged:) forControlEvents:UIControlEventValueChanged];
@@ -154,6 +229,7 @@
         {
             BOOL pinRow = indexPath.row == 2;
             [[cell textLabel] setText:pinRow ? @"SpringBoard at Bottom of Sidebar" : @"5 Apps in Sidebar"];
+            cell.imageView.image = pinRow ? CRRowIcon(@"pin.fill", [UIColor systemRedColor]) : CRRowIcon(@"sidebar.left", [UIColor systemPurpleColor]);
             UISwitch *cellSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
             [cellSwitch setOn:pinRow ? [[CRPreferences sharedInstance] pinSpringBoardInDock] : [[CRPreferences sharedInstance] fiveDockIcons] animated:NO];
             cellSwitch.tag = indexPath.row;
@@ -168,7 +244,7 @@
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section
 {
-    switch (section)
+    switch (section - 1)
     {
         case 0:
             return @"CarPlay Dashboard";
@@ -185,11 +261,16 @@
         default:
             break;
     }
-    return @"";
+    return nil;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section
 {
+    if (section == tableView.numberOfSections - 1)
+    {
+        return @"By estrogencat, built on carplay-cast by Ethan Arbuckle";
+    }
+    section -= 1;
     if (section == 1)
     {
         return @"On: apps open next to CarPlay's own sidebar and close with its home button, like built-in CarPlay apps. Off: apps open full screen with their own dock (home, fullscreen and rotate buttons). Applies the next time an app opens.";
@@ -206,16 +287,12 @@
     {
         return @"Only used when Native CarPlay Look is off.";
     }
-    if (section == tableView.numberOfSections - 1)
-    {
-        return @"By estrogencat, built on carplay-cast by Ethan Arbuckle";
-    }
-    return @"";
+    return nil;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    switch (indexPath.section)
+    switch (indexPath.section - 1)
     {
         case 0:
         {
