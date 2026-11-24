@@ -313,6 +313,53 @@ A Carplay connected/disconnected event
 
 %end
 
+%hook SBMainWorkspace
+
+/*
+An app on the car opening a link (or another app). SpringBoard turns it down since the app isn't visible on the phone,
+so the app it opens goes on the car instead, handed the link.
+*/
+- (void)systemService:(id)service handleOpenApplicationRequest:(id)request withCompletion:(void (^)(id, id))completion
+{
+    CRCarPlayWindow *liveCarplayWindow = objcInvoke([UIApplication sharedApplication], @"liveCarplayWindow");
+    id clientProcess = objcInvoke(request, @"clientProcess");
+    NSString *clientID = [clientProcess respondsToSelector:NSSelectorFromString(@"bundleIdentifier")] ? objcInvoke(clientProcess, @"bundleIdentifier") : nil;
+    NSString *targetID = objcInvoke(request, @"bundleIdentifier");
+    if (!liveCarplayWindow || liveCarplayWindow.isDismissing || !targetID || ![clientID isEqualToString:[liveCarplayWindow bundleIdentifier]])
+    {
+        %orig;
+        return;
+    }
+
+    id options = objcInvoke(request, @"options");
+    NSURL *url = [options respondsToSelector:NSSelectorFromString(@"url")] ? objcInvoke(options, @"url") : nil;
+    NSMutableSet *actions = [NSMutableSet set];
+    for (id action in ([options respondsToSelector:NSSelectorFromString(@"actions")] ? objcInvoke(options, @"actions") : nil))
+    {
+        [actions addObject:action];
+    }
+    BOOL hasURLAction = NO;
+    for (id action in actions)
+    {
+        hasURLAction |= [action isKindOfClass:objc_getClass("UIOpenURLAction")];
+    }
+    if (url && !hasURLAction)
+    {
+        [actions addObject:[[[objc_getClass("UIOpenURLAction") alloc] initWithURL:url] autorelease]];
+    }
+    CRLog(@"%@ opens %@ (%@) on the car", clientID, targetID, url ? url.scheme : @"no url");
+    CGRect appFrame = liveCarplayWindow.rootWindow.frame;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        CRLaunchAppOnCarplay(targetID, appFrame, actions.count ? actions : nil);
+    });
+    if (completion)
+    {
+        completion(nil, nil);
+    }
+}
+
+%end
+
 %hook SBSceneView
 
 /*

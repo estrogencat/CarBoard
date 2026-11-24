@@ -1,32 +1,66 @@
-name: Build
-on: push
+name: Build and release
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
 jobs:
   build:
-    name: Build Tweak
-    runs-on: macOS-latest
+    name: Build tweak
+    runs-on: macos-15
     env:
-      THEOS: theos
+      THEOS: ${{ github.workspace }}/theos
     steps:
-        - name: Checkout
-          uses: actions/checkout@master
-        - name: Install Dependencies
-          run: brew install ldid xz
-        - name: Setup Theos
-          uses: actions/checkout@master
-          with:
-            repository: theos/theos
-            ref: d84bb676f68ce73a72e5897944af394fb06eb13c
-            path: theos
-            submodules: recursive
-        - name: Download SDKs
-          run: |
-            curl -LO https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS15.6.sdk.tar.xz
-            TMP=$(mktemp -d)
-            tar -xf iPhoneOS15.6.sdk.tar.xz -C $TMP
-            mv $TMP/iPhoneOS15.6.sdk theos/sdks
-            rm -r iPhoneOS15.6.sdk.tar.xz $TMP
-        - name: Build Package
-          id: build_package
-          run: |
-            make package FINALPACKAGE=1 messages=yes
-            echo "::set-output name=package::$(ls -t packages | head -n1)"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install make xz
+
+      - name: Set up Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          path: theos
+          submodules: recursive
+
+      - name: Get the iOS 16.5 SDK
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git sdks-src
+          git -C sdks-src sparse-checkout set iPhoneOS16.5.sdk
+          mv sdks-src/iPhoneOS16.5.sdk "$THEOS/sdks/"
+          rm -rf sdks-src
+
+      # Xcode's clang, ad-hoc codesign: the only combination iOS 18's arm64e SpringBoard loads
+      - name: Build package
+        run: |
+          gmake package FINALPACKAGE=1 -j"$(sysctl -n hw.ncpu)" TARGET_CODESIGN=codesign TARGET_CODESIGN_FLAGS="-f -s -"
+          ls packages
+
+      - name: Check arm64e ABI
+        run: |
+          for f in .theos/obj/carplayenable.dylib .theos/obj/carplayenableprefs.bundle/carplayenableprefs; do
+            otool -hv -arch arm64e "$f" | grep -q USR00 || { echo "$f is not new-ABI arm64e"; exit 1; }
+          done
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DEB=$(ls -t packages/*.deb | head -n1)
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+            FLAGS=""
+          else
+            TAG="build-${GITHUB_SHA::7}"
+            FLAGS="--prerelease"
+          fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$DEB" --clobber
+          else
+            gh release create "$TAG" "$DEB" --target "$GITHUB_SHA" --title "$TAG" --generate-notes $FLAGS
+          fi
